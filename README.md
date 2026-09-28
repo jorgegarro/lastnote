@@ -67,3 +67,9 @@ the window after launch (add `LASTNOTE_SELFTEST=1` to exercise Run-in-console an
 "How to open" note). Without an Apple Developer ID the app is ad-hoc signed, so recipients must
 approve it once in System Settings ▸ Privacy & Security ▸ Open Anyway. With a Developer ID, set
 `LASTNOTE_SIGN_ID` before running the script, then notarize the .dmg so it opens without warnings.
+
+## Versions and changes
+
+Every update bumps the version with `scripts/bump_version.sh` (0.1.1, 0.1.2, … 0.1.99, then 0.2.0;
+the build number always increases) and lands through its own pull request, so the PR list is the
+change history. The version shows in LastNote ▸ About LastNote and in the .dmg name.
