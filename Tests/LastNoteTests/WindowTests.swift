@@ -87,7 +87,7 @@ final class WindowTests: XCTestCase {
         let field = try XCTUnwrap(wc.window?.firstResponder as? NSTextView, "rename field didn't take focus")
         field.string = "Renamed"
         field.doCommand(by: #selector(NSResponder.insertNewline(_:)))
-        XCTAssertEqual(wc.current?.displayName, "Renamed")
+        XCTAssertTrue(waitUntil(1) { self.wc.current?.displayName == "Renamed" })
     }
 
     // MARK: Tints & transparency

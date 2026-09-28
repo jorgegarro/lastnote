@@ -58,14 +58,22 @@ final class TabBar: NSView {
         self.theme = theme
         layer?.backgroundColor = drawsBackground ? theme.chrome.cgColor : nil
         newButton.contentTintColor = theme.chromeText
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (i, item) in items.enumerated() {
-            let tab = TabItemView(item: item, index: i, selected: i == selected, theme: theme, compact: compact)
+        // Update existing tab views in place; only add/remove views when the number of tabs
+        // changes. Rebuilding on every change would destroy a tab while it is still handling the
+        // click that caused the change.
+        var tabs = stack.arrangedSubviews.compactMap { $0 as? TabItemView }
+        while tabs.count > items.count { tabs.removeLast().removeFromSuperview() }
+        while tabs.count < items.count {
+            let tab = TabItemView(compact: compact)
             tab.onSelect = { [weak self] in self?.onSelect?($0) }
             tab.onClose = { [weak self] in self?.onClose?($0) }
             tab.menuProvider = { [weak self] in self?.menuForTab?($0) }
-            tab.onRename = onRename == nil ? nil : { [weak self] in self?.onRename?($0, $1) }
+            tab.onRename = { [weak self] in self?.onRename?($0, $1) }
             stack.addArrangedSubview(tab)
+            tabs.append(tab)
+        }
+        for (i, item) in items.enumerated() {
+            tabs[i].update(item: item, index: i, selected: i == selected, theme: theme, renamable: onRename != nil)
         }
     }
 
@@ -83,35 +91,33 @@ final class TabBar: NSView {
 
 private final class TabItemView: NSView, NSTextFieldDelegate {
     var onSelect: ((Int) -> Void)?
-    var onRename: ((Int, String) -> Void)?
-    private var editor: NSTextField?
-    private let title: String
     var onClose: ((Int) -> Void)?
+    var onRename: ((Int, String) -> Void)?
     var menuProvider: ((Int) -> NSMenu?)?
-    private let index: Int
-    private let selected: Bool
-    private let theme: Theme
-    private let tint: NSColor?
+
+    private var index = 0
+    private var title = ""
+    private var selected = false
+    private var theme = Theme.dark
+    private var tint: NSColor?
+    private var renamable = true
+    private let compact: Bool
     private let label = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let accent = CALayer()
+    private var editor: NSTextField?
+    private var editingWidth: NSLayoutConstraint?
+    private var cancelled = false
     private var hovering = false { didSet { updateColors() } }
 
-    init(item: TabBar.Item, index: Int, selected: Bool, theme: Theme, compact: Bool) {
-        self.index = index
-        self.selected = selected
-        self.theme = theme
-        self.tint = item.tint
-        self.title = item.title
+    init(compact: Bool) {
+        self.compact = compact
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 6
         layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         layer?.masksToBounds = true
-        toolTip = item.tooltip
 
-        label.stringValue = (item.dirty ? "● " : "") + item.title
-        label.font = .systemFont(ofSize: compact ? 11 : 12, weight: selected ? .semibold : .regular)
         label.lineBreakMode = .byTruncatingMiddle
         label.translatesAutoresizingMaskIntoConstraints = false
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -141,10 +147,22 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             closeButton.heightAnchor.constraint(equalToConstant: compact ? 12 : 14),
         ])
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
-        updateColors()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    func update(item: TabBar.Item, index: Int, selected: Bool, theme: Theme, renamable: Bool) {
+        self.index = index
+        self.title = item.title
+        self.selected = selected
+        self.theme = theme
+        self.tint = item.tint
+        self.renamable = renamable
+        toolTip = item.tooltip
+        label.stringValue = (item.dirty ? "● " : "") + item.title
+        label.font = .systemFont(ofSize: compact ? 11 : 12, weight: selected ? .semibold : .regular)
+        updateColors()
+    }
 
     private func updateColors() {
         let base = theme.kind == .dark ? NSColor.white : NSColor.black
@@ -169,8 +187,25 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         accent.frame = CGRect(x: 0, y: bounds.height - 2, width: bounds.width, height: 2)
     }
 
+    /// Run a callback after the current event has been fully handled, so whatever it changes
+    /// (even removing this tab) can't pull a view out from under AppKit mid-click.
+    private func later(_ body: @escaping () -> Void) {
+        DispatchQueue.main.async(execute: body)
+    }
+
+    // MARK: Mouse
+
+    /// The whole tab is one click target, except the × button and the rename field.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        if hit === closeButton || hit.isDescendant(of: closeButton) { return hit }
+        if let editor, hit.isDescendant(of: editor) { return hit }
+        return self
+    }
+
     override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
+
     override func mouseDown(with event: NSEvent) {
         // Control-click is the Mac "right click"; AppKit only turns it into a context menu if the
         // view doesn't handle mouseDown itself, so do it here.
@@ -178,13 +213,31 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             if let menu = menuProvider?(index) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
             return
         }
-        if event.clickCount == 2, onRename != nil { beginEditing() } else if event.clickCount == 1 { onSelect?(index) }
+        let i = index
+        if event.clickCount == 2, renamable {
+            beginEditing()
+        } else if event.clickCount == 1 {
+            later { [weak self] in self?.onSelect?(i) }
+        }
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return }
+        let i = index
+        later { [weak self] in self?.onClose?(i) }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { menuProvider?(index) }
+
+    @objc private func close() {
+        let i = index
+        later { [weak self] in self?.onClose?(i) }
     }
 
     // MARK: Inline rename
 
     func beginEditing() {
-        guard editor == nil, onRename != nil else { return }
+        guard editor == nil, renamable else { return }
         let field = NSTextField(string: title)
         field.font = label.font
         field.isBordered = false
@@ -197,28 +250,39 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         field.cell?.isScrollable = true
         field.translatesAutoresizingMaskIntoConstraints = false
         addSubview(field)
+        // Give the field room to type in, even if the tab was narrow (removed when editing ends).
+        let width = widthAnchor.constraint(greaterThanOrEqualToConstant: 160)
         NSLayoutConstraint.activate([
             field.leadingAnchor.constraint(equalTo: label.leadingAnchor, constant: -2),
             field.trailingAnchor.constraint(equalTo: closeButton.trailingAnchor),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
-            // Give the field room to type in, even if the tab was narrow.
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+            width,
         ])
+        editingWidth = width
         label.isHidden = true
         editor = field
+        cancelled = false
         window?.makeFirstResponder(field)
         field.currentEditor()?.selectAll(nil)
     }
 
-    private var cancelled = false
-
+    /// Ends editing: first take the field out of the responder chain, then (after this event)
+    /// remove it and report the new name.
     private func finishEditing(commit: Bool) {
         guard let field = editor else { return }
         editor = nil
         let text = field.stringValue
-        field.removeFromSuperview()
-        label.isHidden = false
-        if commit, text != title { onRename?(index, text) }  // may rebuild the tab bar
+        let i = index, oldTitle = title
+        if let w = window, let r = w.firstResponder as? NSView, r.isDescendant(of: field) || r === field.currentEditor() {
+            w.makeFirstResponder(nil)
+        }
+        later { [weak self] in
+            field.removeFromSuperview()
+            self?.editingWidth?.isActive = false
+            self?.editingWidth = nil
+            self?.label.isHidden = false
+            if commit, text != oldTitle { self?.onRename?(i, text) }
+        }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -239,7 +303,4 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         if !cancelled { finishEditing(commit: true) }
         cancelled = false
     }
-    override func otherMouseDown(with event: NSEvent) { if event.buttonNumber == 2 { onClose?(index) } }
-    override func menu(for event: NSEvent) -> NSMenu? { menuProvider?(index) }
-    @objc private func close() { onClose?(index) }
 }

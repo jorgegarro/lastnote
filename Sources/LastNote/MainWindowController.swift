@@ -643,7 +643,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             }
             step += 1
             let s = AppSettings.shared
-            switch Int.random(in: 0..<26, using: &rng) {
+            switch Int.random(in: 0..<30, using: &rng) {
+            case 26, 27: stressClick(in: Bool.random() ? tabBar : console.tabBar, closeButton: false, rng: &rng)
+            case 28: if documents.count > 1 || console.sessions.count > 1 {
+                    stressClick(in: Bool.random() ? tabBar : console.tabBar, closeButton: true, rng: &rng)
+                }
+            case 29: stressClick(in: Bool.random() ? tabBar : console.tabBar, closeButton: false, rng: &rng, clicks: 2)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    if let tv = self.window?.firstResponder as? NSTextView {
+                        tv.string = "t\(step)"
+                        tv.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+                    }
+                }
             case 22: toggleMacroRecording(nil)
             case 23: if !macros.isRecording { playMacroSteps(macros.current, times: Int.random(in: 1...3, using: &rng)) }
             case 24: layoutSession = captureSession(name: "stress", includeTabs: false)
@@ -678,6 +689,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { tick() }
         }
         tick()
+    }
+
+    /// Stress aid: a real click (mouse-down/up through the view's own handling) on a random tab or
+    /// its × button. Skips tabs with unsaved changes so no save prompt appears.
+    private func stressClick(in bar: TabBar, closeButton: Bool, rng: inout SystemRandomNumberGenerator, clicks: Int = 1) {
+        guard let window, let stack = bar.subviews.first(where: { $0 is NSStackView }) as? NSStackView,
+              let tab = stack.arrangedSubviews.randomElement(using: &rng) else { return }
+        if bar === tabBar, let i = stack.arrangedSubviews.firstIndex(of: tab), documents.indices.contains(i), documents[i].isDirty { return }
+        let targetView: NSView = closeButton ? (tab.subviews.first { $0 is NSButton } ?? tab) : tab
+        window.layoutIfNeeded()
+        let p = targetView.convert(NSPoint(x: targetView.bounds.midX, y: targetView.bounds.midY), to: nil)
+        guard let root = window.contentView?.superview, let hit = root.hitTest(p) else { return }
+        for c in 1...clicks {
+            func ev(_ t: NSEvent.EventType) -> NSEvent {
+                NSEvent.mouseEvent(with: t, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                   windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: c, pressure: 1)!
+            }
+            NSApp.postEvent(ev(.leftMouseUp), atStart: false)
+            hit.mouseDown(with: ev(.leftMouseDown))
+            if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) { hit.mouseUp(with: up) }
+        }
     }
 
     // MARK: Split view
