@@ -1,0 +1,4 @@
+module SciKit {
+    umbrella header "SciKit.h"
+    export *
+}

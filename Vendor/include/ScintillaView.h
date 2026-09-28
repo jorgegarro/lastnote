@@ -1,0 +1,1 @@
+../scintilla/cocoa/ScintillaView.h
