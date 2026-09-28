@@ -99,6 +99,9 @@ final class ConsolePanel: NSView {
     let tabBar = TabBar(compact: true)
     private let body = NSView()
     private(set) var sessions: [ConsoleSession] = []
+    /// Sessions shown side by side, left to right (1–3). The active session is one of them.
+    private(set) var visibleSessions: [ConsoleSession] = []
+    let panes = PaneArea()
     private var activeIndex = -1
     private var nextNumber = 1
     private let colorButton = ConsolePanel.headerButton("paintpalette", "Console tab colour")
@@ -165,6 +168,19 @@ final class ConsolePanel: NSView {
         tabBar.onClose = { [weak self] in self?.closeSession(at: $0) }
         tabBar.onNew = { [weak self] in self?.addSession() }
         tabBar.menuForTab = { [weak self] in self?.menu(forSession: $0) }
+        tabBar.onCommandClick = { [weak self] in self?.toggleSideBySide(at: $0) }
+        panes.frame = body.bounds
+        panes.autoresizingMask = [.width, .height]
+        body.addSubview(panes)
+        panes.onActivate = { [weak self] i in
+            guard let self, self.visibleSessions.indices.contains(i),
+                  let idx = self.sessions.firstIndex(where: { $0 === self.visibleSessions[i] }) else { return }
+            self.select(idx)
+        }
+        panes.onRemove = { [weak self] i in
+            guard let self, self.visibleSessions.indices.contains(i) else { return }
+            self.removeFromSideBySide(self.visibleSessions[i])
+        }
         tabBar.onRename = { [weak self] index, name in
             guard let self, self.sessions.indices.contains(index) else { return }
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -207,20 +223,95 @@ final class ConsolePanel: NSView {
         return session
     }
 
+    /// Show a session. If it isn't already in a pane it replaces the active pane's session.
     func select(_ index: Int, focus: Bool = true) {
         guard sessions.indices.contains(index) else { return }
-        active?.container.removeFromSuperview()
+        let s = sessions[index]
+        if !visibleSessions.contains(where: { $0 === s }) {
+            if let a = active, let slot = visibleSessions.firstIndex(where: { $0 === a }) {
+                visibleSessions[slot] = s
+            } else {
+                visibleSessions = [s]
+            }
+        }
         activeIndex = index
-        let c = sessions[index].container
-        c.translatesAutoresizingMaskIntoConstraints = false
-        body.addSubview(c)
-        NSLayoutConstraint.activate([
-            c.topAnchor.constraint(equalTo: body.topAnchor), c.bottomAnchor.constraint(equalTo: body.bottomAnchor),
-            c.leadingAnchor.constraint(equalTo: body.leadingAnchor), c.trailingAnchor.constraint(equalTo: body.trailingAnchor),
-        ])
+        layoutPanes()
         reloadTabs()
         if focus { self.focus() }
         onChange?()
+    }
+
+    private func layoutPanes() {
+        let theme = Theme.named(AppSettings.shared.theme)
+        // Session containers paint their own tint, so panes don't paint a background.
+        panes.show(visibleSessions.map { PaneItem(view: $0.container, title: $0.name, tint: $0.tint, background: nil) },
+                   active: visibleSessions.firstIndex { $0 === active } ?? 0, theme: theme)
+    }
+
+    // MARK: Side by side
+
+    /// ⌘-click on a console tab: add it next to the others, or take it out.
+    func toggleSideBySide(at index: Int) {
+        guard sessions.indices.contains(index) else { return }
+        let s = sessions[index]
+        if visibleSessions.contains(where: { $0 === s }) {
+            removeFromSideBySide(s)
+        } else {
+            guard visibleSessions.count < PaneArea.maxPanes else { NSSound.beep(); return }
+            visibleSessions.append(s)
+            select(index)
+        }
+    }
+
+    func removeFromSideBySide(_ s: ConsoleSession) {
+        guard visibleSessions.count > 1, let slot = visibleSessions.firstIndex(where: { $0 === s }) else { return }
+        visibleSessions.remove(at: slot)
+        if s === active {
+            let next = visibleSessions[min(slot, visibleSessions.count - 1)]
+            activeIndex = sessions.firstIndex { $0 === next } ?? activeIndex
+        }
+        layoutPanes()
+        reloadTabs()
+        focus()
+        onChange?()
+    }
+
+    func showOnlyActive() {
+        guard let a = active else { return }
+        visibleSessions = [a]
+        layoutPanes()
+        reloadTabs()
+        focus()
+        onChange?()
+    }
+
+    /// Show these sessions side by side (used when restoring a saved session).
+    func setVisible(indices: [Int]) {
+        let chosen = indices.filter { sessions.indices.contains($0) }.prefix(PaneArea.maxPanes).map { sessions[$0] }
+        guard !chosen.isEmpty else { return }
+        visibleSessions = Array(chosen)
+        activeIndex = sessions.firstIndex { $0 === chosen[0] } ?? activeIndex
+        layoutPanes()
+        reloadTabs()
+        onChange?()
+    }
+
+    var visibleIndices: [Int] { visibleSessions.compactMap { s in sessions.firstIndex { $0 === s } } }
+
+    /// Clicking into a console pane makes its session active.
+    func followFocus(to responder: NSView) {
+        guard let s = visibleSessions.first(where: { responder.isDescendant(of: $0.container) }), s !== active,
+              let i = sessions.firstIndex(where: { $0 === s }) else { return }
+        activeIndex = i
+        layoutPanes()
+        reloadTabs()
+        onChange?()
+    }
+
+    /// The area to glow around when `view` has focus: its pane when split, else the whole body.
+    func focusRegion(for view: NSView) -> NSView {
+        if panes.paneCount > 1, let i = panes.pane(containing: view) { return panes.hosts[i] }
+        return body
     }
 
     func selectNext(_ delta: Int) {
@@ -245,6 +336,7 @@ final class ConsolePanel: NSView {
             s.container.removeFromSuperview()
         }
         sessions.removeAll()
+        visibleSessions.removeAll()
         activeIndex = -1
         nextNumber = 1
         for tab in tabs {
@@ -256,22 +348,31 @@ final class ConsolePanel: NSView {
     }
 
     private func removeSession(at index: Int) {
+        let removed = sessions[index]
         let wasActive = index == activeIndex
-        sessions[index].container.removeFromSuperview()
+        let slot = visibleSessions.firstIndex { $0 === removed }
+        visibleSessions.removeAll { $0 === removed }
+        removed.container.removeFromSuperview()
         sessions.remove(at: index)
         if sessions.isEmpty {
             activeIndex = -1
             nextNumber = 1
+            layoutPanes()
             reloadTabs()
             onAllSessionsClosed?()
             return
         }
-        if wasActive {
+        if !visibleSessions.isEmpty {
+            // Another side-by-side pane takes over (or the active one simply stays).
+            let keep = wasActive ? visibleSessions[min(slot ?? 0, visibleSessions.count - 1)] : active ?? visibleSessions[0]
+            activeIndex = sessions.firstIndex { $0 === keep } ?? 0
+            layoutPanes()
+            reloadTabs()
+            if wasActive { focus() }
+            onChange?()
+        } else {
             activeIndex = -1
             select(min(index, sessions.count - 1))
-        } else {
-            if index < activeIndex { activeIndex -= 1 }
-            reloadTabs()
         }
     }
 
@@ -292,6 +393,23 @@ final class ConsolePanel: NSView {
         }
         menu.addItem(colour)
         menu.addItem(ClosureMenuItem(title: "Rename Tab…") { [weak self] in self?.tabBar.beginRename(at: index) })
+        menu.addItem(.separator())
+        if visibleSessions.contains(where: { $0 === s }) {
+            if visibleSessions.count > 1 {
+                menu.addItem(ClosureMenuItem(title: "Remove from Side by Side") { [weak self] in self?.removeFromSideBySide(s) })
+                menu.addItem(ClosureMenuItem(title: "Show Only This Tab") { [weak self] in
+                    guard let self, let i = self.sessions.firstIndex(where: { $0 === s }) else { return }
+                    self.visibleSessions = [s]
+                    self.select(i)
+                })
+            }
+        } else {
+            let add = ClosureMenuItem(title: "Show Side by Side") { [weak self] in
+                if let self, let i = self.sessions.firstIndex(where: { $0 === s }) { self.toggleSideBySide(at: i) }
+            }
+            add.isEnabled = visibleSessions.count < PaneArea.maxPanes
+            menu.addItem(add)
+        }
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: "New Console Tab") { [weak self] in self?.addSession() })
         menu.addItem(ClosureMenuItem(title: "Duplicate (same colour)") { [weak self] in self?.addSession(tint: s.tint) })
@@ -317,9 +435,12 @@ final class ConsolePanel: NSView {
 
     private func reloadTabs() {
         let theme = Theme.named(AppSettings.shared.theme)
-        tabBar.reload(items: sessions.map {
-            .init(title: $0.name, dirty: false, tooltip: $0.shellTitle.isEmpty ? nil : $0.shellTitle, tint: $0.tint)
+        let multi = visibleSessions.count > 1
+        tabBar.reload(items: sessions.map { s in
+            .init(title: s.name, dirty: false, tooltip: s.shellTitle.isEmpty ? nil : s.shellTitle, tint: s.tint,
+                  visible: multi && visibleSessions.contains { $0 === s })
         }, selected: activeIndex, theme: theme)
+        if multi { layoutPanes() }  // pane headers show names/colours too
     }
 
     // MARK: Focus & commands

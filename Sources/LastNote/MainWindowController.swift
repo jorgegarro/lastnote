@@ -17,6 +17,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     let split = ThemedSplitView()
     let editorColumn = NSView()
     let editorHost = NSView()
+    /// Side-by-side panes inside the editor area.
+    let editorPanes = PaneArea()
+    /// Documents shown in the editor panes, left to right (1–3). `current` is always one of them.
+    private(set) var visibleDocs: [Document] = []
     let findBar = FindBar()
     let console = ConsolePanel()
     let statusBar = StatusBar()
@@ -83,6 +87,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         editorHost.wantsLayer = true
+        editorPanes.frame = editorHost.bounds
+        editorPanes.autoresizingMask = [.width, .height]
+        editorHost.addSubview(editorPanes)
+        editorPanes.onActivate = { [weak self] i in
+            guard let self, self.visibleDocs.indices.contains(i) else { return }
+            self.activate(self.visibleDocs[i], focus: true)
+        }
+        editorPanes.onRemove = { [weak self] i in
+            guard let self, self.visibleDocs.indices.contains(i) else { return }
+            self.removeFromSideBySide(self.visibleDocs[i])
+        }
         content.addSubview(iconBar)
         content.addSubview(tabBar)
         content.addSubview(split)
@@ -128,6 +143,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         tabBar.onClose = { [weak self] in self?.closeDocument(at: $0) }
         tabBar.onNew = { [weak self] in self?.newDocument(nil) }
         tabBar.menuForTab = { [weak self] in self?.menu(forDocumentAt: $0) }
+        tabBar.onCommandClick = { [weak self] in self?.toggleSideBySide(at: $0) }
         tabBar.onRename = { [weak self] index, name in
             guard let self, self.documents.indices.contains(index) else { return }
             self.documents[index].customName = name
@@ -159,7 +175,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         // Focus glow floats above everything and follows the first responder.
         focusGlow.frame = .zero
         content.addSubview(focusGlow)
-        (window as? MainWindow)?.onFirstResponderChange = { [weak self] in self?.updateFocusGlow(animated: true) }
+        (window as? MainWindow)?.onFirstResponderChange = { [weak self] in
+            self?.followFocusToPane()
+            self?.updateFocusGlow(animated: true)
+        }
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 self?.updateFocusGlow(animated: true)
@@ -191,7 +210,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             backdrop.isHidden = true
         }
         tintView.layer?.backgroundColor = regionColor(for: nil).cgColor
-        editorHost.layer?.backgroundColor = regionColor(for: current?.tint).cgColor
+        editorHost.layer?.backgroundColor = nil  // each pane paints its own tab's colour
         window.invalidateShadow()
         documents.forEach { $0.applySettings() }
         console.applySettings()
@@ -238,8 +257,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     /// (e.g. the find field, which has its own focus ring).
     func focusRegion(for responder: NSResponder?) -> NSView? {
         guard let view = responder as? NSView else { return nil }
-        if view.isDescendant(of: editorHost) { return editorHost }
-        if view.isDescendant(of: console), !console.isHidden { return console.bodyView }
+        if view.isDescendant(of: editorHost) {
+            // With several panes, glow around the one being typed in.
+            if editorPanes.paneCount > 1, let i = editorPanes.pane(containing: view) { return editorPanes.hosts[i] }
+            return editorHost
+        }
+        if view.isDescendant(of: console), !console.isHidden { return console.focusRegion(for: view) }
         return nil
     }
 
@@ -255,8 +278,76 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                        strength: CGFloat(s.focusGlowOpacity), animated: animated)
     }
 
-    private func applyDocumentTint() {
-        editorHost.layer?.backgroundColor = regionColor(for: current?.tint).cgColor
+    private func applyDocumentTint() { layoutEditorPanes() }
+
+    /// Put the visible documents into the editor panes.
+    private func layoutEditorPanes() {
+        let theme = Theme.named(AppSettings.shared.theme)
+        editorPanes.show(visibleDocs.map { PaneItem(view: $0.view, title: $0.displayName, tint: $0.tint, background: regionColor(for: $0.tint)) },
+                         active: visibleDocs.firstIndex { $0 === current } ?? 0, theme: theme)
+    }
+
+    // MARK: Side by side
+
+    /// Make a visible document the active one (after a click in its pane or its header).
+    func activate(_ doc: Document, focus: Bool) {
+        guard let i = documents.firstIndex(where: { $0 === doc }) else { return }
+        if i != selectedIndex {
+            selectedIndex = i
+            refreshTabs()
+            refreshTitle()
+            refreshStatus()
+            layoutEditorPanes()
+            if !findBar.isHidden { findBar.highlightAll() }
+        }
+        if focus { window?.makeFirstResponder(doc.view.content()) }
+    }
+
+    /// ⌘-click on a tab: add it to the side-by-side view, or take it out if it's already shown.
+    func toggleSideBySide(at index: Int) {
+        guard documents.indices.contains(index) else { return }
+        let doc = documents[index]
+        if visibleDocs.contains(where: { $0 === doc }) {
+            removeFromSideBySide(doc)
+        } else {
+            guard visibleDocs.count < PaneArea.maxPanes else { NSSound.beep(); return }
+            visibleDocs.append(doc)
+            layoutEditorPanes()
+            activate(doc, focus: true)
+            refreshTabs()
+        }
+    }
+
+    func removeFromSideBySide(_ doc: Document) {
+        guard visibleDocs.count > 1, let slot = visibleDocs.firstIndex(where: { $0 === doc }) else { return }
+        visibleDocs.remove(at: slot)
+        if doc === current { selectedIndex = documents.firstIndex { $0 === visibleDocs[min(slot, visibleDocs.count - 1)] } ?? selectedIndex }
+        layoutEditorPanes()
+        refreshTabs()
+        refreshTitle()
+        refreshStatus()
+        if let cur = current { window?.makeFirstResponder(cur.view.content()) }
+    }
+
+    /// Back to one pane showing the active tab.
+    @objc func showOnlyActiveTab(_ sender: Any?) {
+        if console.containsFirstResponder { console.showOnlyActive(); return }
+        guard let cur = current else { return }
+        visibleDocs = [cur]
+        layoutEditorPanes()
+        refreshTabs()
+        window?.makeFirstResponder(cur.view.content())
+    }
+
+    /// Clicking into a pane makes its tab the active one.
+    private func followFocusToPane() {
+        guard let responder = window?.firstResponder as? NSView else { return }
+        if responder.isDescendant(of: editorHost),
+           let doc = visibleDocs.first(where: { responder.isDescendant(of: $0.view) }), doc !== current {
+            activate(doc, focus: false)
+        } else if responder.isDescendant(of: console) {
+            console.followFocus(to: responder)
+        }
     }
 
     // MARK: Documents
@@ -266,7 +357,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         doc.onStateChange = { [weak self, weak doc] in
             guard let self, let doc else { return }
             self.refreshTabs()
-            if doc === self.current { self.refreshTitle(); self.refreshStatus(); self.applyDocumentTint() }
+            if doc === self.current { self.refreshTitle(); self.refreshStatus() }
+            if self.visibleDocs.contains(where: { $0 === doc }) { self.layoutEditorPanes() }  // pane name/colour
         }
         doc.onCaretChange = { [weak self, weak doc] in
             if let doc, doc === self?.current { self?.refreshStatus() }
@@ -282,18 +374,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         return doc
     }
 
+    /// Show a document. If it isn't already in a pane it replaces the active pane's document.
     func select(_ index: Int) {
         guard documents.indices.contains(index) else { return }
-        current?.view.removeFromSuperview()
-        selectedIndex = index
         let doc = documents[index]
-        doc.view.frame = editorHost.bounds
-        editorHost.addSubview(doc.view)
+        if !visibleDocs.contains(where: { $0 === doc }) {
+            if let cur = current, let slot = visibleDocs.firstIndex(where: { $0 === cur }) {
+                visibleDocs[slot] = doc
+            } else {
+                visibleDocs = [doc]
+            }
+        }
+        selectedIndex = index
+        layoutEditorPanes()
         window?.makeFirstResponder(doc.view.content())
         refreshTabs()
         refreshTitle()
         refreshStatus()
-        applyDocumentTint()
         if !findBar.isHidden { findBar.highlightAll() }
     }
 
@@ -311,6 +408,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                    only.view.sci(SCI_GETLENGTH) == 0 {
                     only.view.removeFromSuperview()
                     documents.removeAll()
+                    visibleDocs.removeAll()
                     selectedIndex = -1
                 }
                 addDocument(doc)
@@ -332,11 +430,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             default: return
             }
         }
+        // `current` is looked up by index, so remember the active document before removing one.
+        let previous = current
+        let wasCurrent = doc === previous
+        let slot = visibleDocs.firstIndex { $0 === doc }
+        visibleDocs.removeAll { $0 === doc }
         doc.view.removeFromSuperview()
         documents.remove(at: index)
         if documents.isEmpty {
             selectedIndex = -1
             newDocument(nil)
+        } else if !visibleDocs.isEmpty {
+            // It was one of several side-by-side panes: the neighbouring pane takes over.
+            let next = wasCurrent ? visibleDocs[min(slot ?? 0, visibleDocs.count - 1)] : (previous ?? visibleDocs[0])
+            selectedIndex = documents.firstIndex { $0 === next } ?? 0
+            layoutEditorPanes()
+            refreshTabs()
+            refreshTitle()
+            refreshStatus()
+            if wasCurrent { window?.makeFirstResponder(next.view.content()) }
         } else {
             selectedIndex = -1
             select(min(index, documents.count - 1))
@@ -396,7 +508,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     // MARK: Refresh
 
     private func refreshTabs() {
-        tabBar.reload(items: documents.map { .init(title: $0.displayName, dirty: $0.isDirty, tooltip: $0.tooltip, tint: $0.tint) },
+        let multi = visibleDocs.count > 1
+        tabBar.reload(items: documents.map { d in
+            .init(title: d.displayName, dirty: d.isDirty, tooltip: d.tooltip, tint: d.tint,
+                  visible: multi && visibleDocs.contains { $0 === d })
+        },
                       selected: selectedIndex, theme: Theme.named(AppSettings.shared.theme))
     }
 
@@ -453,6 +569,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         let colour = NSMenuItem(title: "Tab Colour", action: nil, keyEquivalent: "")
         colour.submenu = TintMenu.make(current: doc.tint) { [weak doc] in doc?.tint = $0 }
         menu.addItem(colour)
+        menu.addItem(.separator())
+        if visibleDocs.contains(where: { $0 === doc }) {
+            if visibleDocs.count > 1 {
+                menu.addItem(ClosureMenuItem(title: "Remove from Side by Side") { [weak self, weak doc] in
+                    if let doc { self?.removeFromSideBySide(doc) }
+                })
+            }
+        } else {
+            let add = ClosureMenuItem(title: "Show Side by Side") { [weak self, weak doc] in
+                if let self, let doc, let i = self.documents.firstIndex(where: { $0 === doc }) { self.toggleSideBySide(at: i) }
+            }
+            add.isEnabled = visibleDocs.count < PaneArea.maxPanes
+            add.toolTip = "⌘-click a tab does the same (up to \(PaneArea.maxPanes) side by side)"
+            menu.addItem(add)
+        }
+        if visibleDocs.count > 1 {
+            menu.addItem(ClosureMenuItem(title: "Show Only This Tab") { [weak self, weak doc] in
+                guard let self, let doc, let i = self.documents.firstIndex(where: { $0 === doc }) else { return }
+                self.visibleDocs = [doc]
+                self.select(i)
+            })
+        }
+        menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: "Rename Tab…") { [weak self] in self?.tabBar.beginRename(at: index) })
         if doc.customName != nil {
             menu.addItem(ClosureMenuItem(title: "Reset Tab Name") { [weak doc] in doc?.customName = nil })
@@ -618,6 +757,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 }
             }
         }
+        if ProcessInfo.processInfo.environment["LASTNOTE_SELFTEST_SPLIT"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                self.hideFindBar()
+                for i in 1..<min(3, self.documents.count) { self.toggleSideBySide(at: i) }
+                if self.console.sessions.count >= 2 { self.console.toggleSideBySide(at: 0) }
+                self.focusEditor(nil)
+            }
+        }
         if ProcessInfo.processInfo.environment["LASTNOTE_SELFTEST_RECORD"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.toggleMacroRecording(nil) }
         }
@@ -643,7 +790,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             }
             step += 1
             let s = AppSettings.shared
-            switch Int.random(in: 0..<30, using: &rng) {
+            switch Int.random(in: 0..<34, using: &rng) {
+            case 30, 31: if !documents.isEmpty { toggleSideBySide(at: Int.random(in: 0..<documents.count, using: &rng)) }
+            case 32: if !console.sessions.isEmpty { console.toggleSideBySide(at: Int.random(in: 0..<console.sessions.count, using: &rng)) }
+            case 33: if Bool.random() { showOnlyActiveTab(nil) } else { console.showOnlyActive() }
             case 26, 27: stressClick(in: Bool.random() ? tabBar : console.tabBar, closeButton: false, rng: &rng)
             case 28: if documents.count > 1 || console.sessions.count > 1 {
                     stressClick(in: Bool.random() ? tabBar : console.tabBar, closeButton: true, rng: &rng)
@@ -890,6 +1040,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             }
             session.selectedFile = current?.url?.path
             session.consoleTabs = console.sessions.map { .init(name: $0.customName, tint: $0.tint?.hexString) }
+            if visibleDocs.count > 1 { session.visibleFiles = visibleDocs.compactMap { $0.url?.path } }
+            if console.visibleSessions.count > 1 { session.visibleConsoleTabs = console.visibleIndices }
         }
         return session
     }
@@ -903,6 +1055,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             guard confirmCloseAll() else { return nil }
             for d in documents { d.view.removeFromSuperview() }
             documents.removeAll()
+            visibleDocs.removeAll()
             selectedIndex = -1
             newDocument(nil)  // placeholder; replaced by the first file opened
             let existing = files.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -913,11 +1066,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 doc.tint = f.tint.flatMap { NSColor(hex: $0) }
             }
             if let sel = session.selectedFile, let i = documents.firstIndex(where: { $0.url?.path == sel }) { select(i) }
+            if let paths = session.visibleFiles {
+                let docs = paths.compactMap { p in documents.first { $0.url?.path == p } }.prefix(PaneArea.maxPanes)
+                if docs.count > 1 {
+                    visibleDocs = Array(docs)
+                    if let cur = current, !visibleDocs.contains(where: { $0 === cur }) {
+                        selectedIndex = documents.firstIndex { $0 === visibleDocs[0] } ?? selectedIndex
+                    }
+                    layoutEditorPanes()
+                    refreshTabs()
+                }
+            }
             missing = files.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) }
         }
         AppSettings.shared.apply(session.look)
         if let tabs = session.consoleTabs {
             console.replaceSessions(with: tabs.map { ($0.name, $0.tint.flatMap { NSColor(hex: $0) }) })
+            if let visible = session.visibleConsoleTabs { console.setVisible(indices: visible) }
         }
         if let window {
             var frame = NSRectFromString(session.windowFrame)

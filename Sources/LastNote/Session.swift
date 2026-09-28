@@ -43,6 +43,10 @@ struct SavedSession: Codable, Equatable {
     var files: [File]?
     var selectedFile: String?
     var consoleTabs: [ConsoleTab]?
+    /// Files shown side by side (paths, left to right), when more than one.
+    var visibleFiles: [String]? = nil
+    /// Console tabs shown side by side (indices into `consoleTabs`), when more than one.
+    var visibleConsoleTabs: [Int]? = nil
 
     var includesTabs: Bool { files != nil }
 }

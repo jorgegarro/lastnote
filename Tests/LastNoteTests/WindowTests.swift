@@ -114,7 +114,7 @@ final class WindowTests: XCTestCase {
         AppSettings.shared.transparencyEnabled = true
         waitUntil(0.3) { false }
         wc.current?.tint = NSColor(hex: "#2E7D32")
-        let painted = wc.editorHost.layer?.backgroundColor.flatMap { NSColor(cgColor: $0) }
+        let painted = wc.editorPanes.hosts.first?.layer?.backgroundColor.flatMap { NSColor(cgColor: $0) }
         XCTAssertEqual(painted?.withAlphaComponent(1).hexString, "#2E7D32")
         XCTAssertEqual(painted?.alphaComponent ?? 0, CGFloat(AppSettings.shared.opacity), accuracy: 0.01)
     }

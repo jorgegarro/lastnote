@@ -3,7 +3,14 @@ import AppKit
 /// Notepad++-style tabs: click to select, × or middle-click to close, right-click for a menu.
 /// Used for documents and (in compact form) for console sessions.
 final class TabBar: NSView {
-    struct Item { var title: String; var dirty: Bool; var tooltip: String?; var tint: NSColor? = nil }
+    struct Item {
+        var title: String
+        var dirty: Bool
+        var tooltip: String?
+        var tint: NSColor? = nil
+        /// Shown in a side-by-side pane (but not necessarily the active one).
+        var visible = false
+    }
 
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
@@ -12,6 +19,8 @@ final class TabBar: NSView {
     var menuForTab: ((Int) -> NSMenu?)?
     /// A tab was renamed inline (double-click or `beginRename`). Empty string = reset to default.
     var onRename: ((Int, String) -> Void)?
+    /// ⌘-click: add the tab to / remove it from the side-by-side view.
+    var onCommandClick: ((Int) -> Void)?
 
     let compact: Bool
     private let stack = NSStackView()
@@ -69,6 +78,7 @@ final class TabBar: NSView {
             tab.onClose = { [weak self] in self?.onClose?($0) }
             tab.menuProvider = { [weak self] in self?.menuForTab?($0) }
             tab.onRename = { [weak self] in self?.onRename?($0, $1) }
+            tab.onCommandClick = { [weak self] in self?.onCommandClick?($0) }
             stack.addArrangedSubview(tab)
             tabs.append(tab)
         }
@@ -93,9 +103,11 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onRename: ((Int, String) -> Void)?
+    var onCommandClick: ((Int) -> Void)?
     var menuProvider: ((Int) -> NSMenu?)?
 
     private var index = 0
+    private var visibleInPane = false
     private var title = ""
     private var selected = false
     private var theme = Theme.dark
@@ -158,7 +170,8 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
         self.theme = theme
         self.tint = item.tint
         self.renamable = renamable
-        toolTip = item.tooltip
+        self.visibleInPane = item.visible
+        toolTip = [item.tooltip, "⌘-click to show side by side"].compactMap { $0 }.joined(separator: "\n")
         label.stringValue = (item.dirty ? "● " : "") + item.title
         label.font = .systemFont(ofSize: compact ? 11 : 12, weight: selected ? .semibold : .regular)
         updateColors()
@@ -167,18 +180,21 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
     private func updateColors() {
         let base = theme.kind == .dark ? NSColor.white : NSColor.black
         let bg: NSColor
+        // Selected = active; "visible" = shown in another side-by-side pane.
         if let tint {
             // Coloured tabs carry their colour, stronger when selected.
-            bg = tint.withAlphaComponent(selected ? 0.75 : hovering ? 0.5 : 0.35)
+            bg = tint.withAlphaComponent(selected ? 0.75 : visibleInPane ? 0.6 : hovering ? 0.5 : 0.35)
         } else {
-            bg = selected ? base.withAlphaComponent(0.14) : hovering ? base.withAlphaComponent(0.07) : .clear
+            bg = selected ? base.withAlphaComponent(0.14) : visibleInPane ? base.withAlphaComponent(0.1)
+                : hovering ? base.withAlphaComponent(0.07) : .clear
         }
         layer?.backgroundColor = bg.cgColor
         label.textColor = selected || tint != nil ? theme.foreground : theme.chromeText.withAlphaComponent(0.8)
         closeButton.contentTintColor = theme.chromeText
         closeButton.alphaValue = selected || hovering ? 1 : 0.35
-        accent.isHidden = !selected
-        accent.backgroundColor = (tint?.blended(withFraction: 0.35, of: .white) ?? theme.style(.keyword).color).cgColor
+        accent.isHidden = !selected && !visibleInPane
+        accent.backgroundColor = (tint?.blended(withFraction: 0.35, of: .white) ?? theme.style(.keyword).color)
+            .withAlphaComponent(selected ? 1 : 0.45).cgColor
     }
 
     override func layout() {
@@ -214,6 +230,10 @@ private final class TabItemView: NSView, NSTextFieldDelegate {
             return
         }
         let i = index
+        if event.modifierFlags.contains(.command) {
+            later { [weak self] in self?.onCommandClick?(i) }
+            return
+        }
         if event.clickCount == 2, renamable {
             beginEditing()
         } else if event.clickCount == 1 {
