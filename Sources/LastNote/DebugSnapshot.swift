@@ -25,7 +25,7 @@ enum DebugSnapshot {
         guard let path = ProcessInfo.processInfo.environment["LASTNOTE_SNAPSHOT"], let window else { return }
         let delay = Double(ProcessInfo.processInfo.environment["LASTNOTE_SNAPSHOT_DELAY"] ?? "") ?? 2.5
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            if let image = windowServerImage(window) {
+            if ProcessInfo.processInfo.environment["LASTNOTE_SNAPSHOT_LAYERS"] != "1", let image = windowServerImage(window) {
                 // Real composited pixels (including what's behind a transparent window).
                 try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
                 if ProcessInfo.processInfo.environment["LASTNOTE_SNAPSHOT_QUIT"] == "1" { exit(0) }

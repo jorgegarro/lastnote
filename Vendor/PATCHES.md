@@ -26,4 +26,14 @@ Translucent editor backgrounds, so the window tint/blur shows through while text
 6. `scintilla/cocoa/ScintillaView.mm` — `SCIMarginView` is non-opaque and skips NSRulerView's
    background drawing.
 
+Bug fixes (found with Address Sanitizer + `LASTNOTE_STRESS`):
+
+7. `scintilla/src/PositionCache.cxx` — `LineLayout::CalculatePositions` read `chars[-1]` and
+   `styles[-1]` for empty lines (heap-buffer-overflow). Guarded.
+8. `scintilla/src/MarginView.cxx` — when both fold-margin colours are equal, fill the margin with
+   a solid colour instead of a tiled CGPattern. The pattern was the only nested drawing in a
+   CoreGraphics display-list replay crash seen on macOS 26.
+9. `scintilla/src/EditView.cxx` — `DrawTextBlob` draws the letters of LF/CR/control-char blobs
+   in the (now transparent) back colour; use it opaque so the letters stay visible.
+
 When upgrading Scintilla, re-apply these.

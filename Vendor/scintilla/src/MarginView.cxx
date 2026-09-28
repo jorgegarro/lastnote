@@ -482,8 +482,15 @@ void MarginView::PaintMargin(Surface *surface, Sci::Line topLine, PRectangle rc,
 					// Ensure patterns line up when scrolling with separate margin view
 					// by choosing correctly aligned variant.
 					const bool invertPhase = static_cast<int>(ptOrigin.y) & 1;
-					surface->FillRectangle(rcOneMargin,
-						invertPhase ? *pixmapSelPattern : *pixmapSelPatternOffset1);
+					if (vs.foldmarginColour && vs.foldmarginHighlightColour &&
+						(*vs.foldmarginColour == *vs.foldmarginHighlightColour)) {
+						// [lastnote patch] Both checkerboard colours are the same: fill solid. Avoids
+						// the image-pattern path, which macOS replays lazily from display lists.
+						surface->FillRectangle(rcOneMargin, *vs.foldmarginColour);
+					} else {
+						surface->FillRectangle(rcOneMargin,
+							invertPhase ? *pixmapSelPattern : *pixmapSelPatternOffset1);
+					}
 				} else {
 					ColourRGBA colour;
 					switch (marginStyle.style) {

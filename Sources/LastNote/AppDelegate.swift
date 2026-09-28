@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["LASTNOTE_SELFTEST"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [mainWindow] in mainWindow?.runSelfTest() }
         }
+        if let secs = ProcessInfo.processInfo.environment["LASTNOTE_STRESS"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [mainWindow] in mainWindow?.runStress(seconds: secs) }
+        }
         DebugSnapshot.scheduleIfRequested(mainWindow.window)
     }
 

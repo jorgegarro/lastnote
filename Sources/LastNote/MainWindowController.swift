@@ -604,6 +604,53 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         }
     }
 
+    /// Development aid (LASTNOTE_STRESS=seconds): hammer the UI with random actions to shake out
+    /// memory bugs (run under Address Sanitizer).
+    func runStress(seconds: Double) {
+        var rng = SystemRandomNumberGenerator()
+        let end = Date().addingTimeInterval(seconds)
+        let colors = ["#B3261E", "#2E7D32", "#1565C0", "#6A1B9A", nil]
+        var step = 0
+        func tick() {
+            guard Date() < end else {
+                print("stress: done after \(step) steps, \(documents.count) docs, \(console.sessions.count) shells")
+                exit(0)
+            }
+            step += 1
+            let s = AppSettings.shared
+            switch Int.random(in: 0..<22, using: &rng) {
+            case 0: newDocument(nil)
+            case 1: if documents.count > 1, let d = documents.randomElement(), !d.isDirty,
+                       let i = documents.firstIndex(where: { $0 === d }) { closeDocument(at: i) }
+            case 2: if !documents.isEmpty { select(Int.random(in: 0..<documents.count, using: &rng)) }
+            case 3, 4: current?.view.sci(SCI_ADDTEXT, 20, string: "self.value = 42 # x\n")
+            case 5: current?.tint = colors.randomElement()!.flatMap { NSColor(hex: $0) }
+            case 6: s.transparencyEnabled.toggle()
+            case 7: s.theme = s.theme == .dark ? .light : .dark
+            case 8: s.wordWrap.toggle()
+            case 9: s.showWhitespace.toggle(); s.showLineEndings.toggle()
+            case 10: if console.sessions.count < 5 { newConsoleTab(nil) }
+            case 11: if console.sessions.count > 1 { console.closeSession(at: Int.random(in: 0..<console.sessions.count, using: &rng)) }
+            case 12: console.active?.run("echo stress \(step); ls -la /usr/bin | head -40")
+            case 13: if let ss = console.sessions.randomElement() { console.setTint(colors.randomElement()!.flatMap { NSColor(hex: $0) }, for: ss) }
+            case 14: showFind(nil); findBar.findField.stringValue = "self"; findBar.highlightAll()
+            case 15: hideFindBar()
+            case 16: [#selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(foldAll(_:)), #selector(unfoldAll(_:))]
+                .randomElement().map { _ = self.perform($0, with: nil) }
+            case 17: if let w = window, let scr = w.screen?.visibleFrame {
+                    w.setFrame(NSRect(x: scr.minX, y: scr.minY, width: CGFloat.random(in: 600...scr.width, using: &rng),
+                                      height: CGFloat.random(in: 400...scr.height, using: &rng)), display: true)
+                }
+            case 18: setConsoleVisible(console.isHidden)
+            case 19: if Bool.random() { focusEditor(nil) } else { console.focus() }
+            case 20: s.opacity = Double.random(in: 0.2...1, using: &rng); s.blurEnabled.toggle()
+            default: current?.view.sci(SCI_SELECTALL); current?.view.sci(SCI_CLEAR); current?.view.sci(SCI_SETSAVEPOINT)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { tick() }
+        }
+        tick()
+    }
+
     // MARK: Split view
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt index: Int) -> CGFloat {
