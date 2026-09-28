@@ -13,6 +13,7 @@ optional transparent, tinted window.
 ```bash
 swift run                 # dev run (unbundled)
 scripts/bundle.sh         # release build -> build/LastNote.app
+scripts/install.sh        # build + install to /Applications and launch
 open build/LastNote.app
 swift test                # unit + end-to-end tests (real window, real shells)
 scripts/make_icns.sh      # regenerate the app icon from scripts/make_icon.swift
