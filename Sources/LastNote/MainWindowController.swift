@@ -211,7 +211,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             backdrop.isHidden = true
         }
         tintView.layer?.backgroundColor = regionColor(for: nil).cgColor
-        editorHost.layer?.backgroundColor = nil  // each pane paints its own tab's colour
+        editorHost.layer?.backgroundColor = nil  // each pane paints its own tab's colour…
+        layoutEditorPanes()                       // …so repaint them with the new transparency/tint
         window.invalidateShadow()
         documents.forEach { $0.applySettings() }
         console.applySettings()

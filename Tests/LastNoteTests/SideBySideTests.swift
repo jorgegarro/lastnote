@@ -108,6 +108,29 @@ final class SideBySideTests: XCTestCase {
         XCTAssertEqual(colours[1]?.hexString, wc.regionColor(for: NSColor(hex: "#2E7D32")).hexString)
     }
 
+    /// Turning transparency on/off (or changing opacity/tint) must repaint every editor pane, not just
+    /// the window chrome.
+    func testTransparencyAppliesToEditorPanes() {
+        openThree()
+        wc.toggleSideBySide(at: 1)
+        let s = AppSettings.shared
+        func paneAlphas() -> [CGFloat] {
+            wc.editorPanes.hosts.map { $0.layer?.backgroundColor.flatMap { NSColor(cgColor: $0) }?.alphaComponent ?? -1 }
+        }
+        XCTAssertEqual(paneAlphas(), [1, 1], "solid window: opaque panes")
+        s.opacity = 0.4
+        s.transparencyEnabled = true
+        XCTAssertTrue(waitUntil(2) { paneAlphas().allSatisfy { abs($0 - 0.4) < 0.01 } }, "\(paneAlphas())")
+        s.opacity = 0.7
+        XCTAssertTrue(waitUntil(2) { paneAlphas().allSatisfy { abs($0 - 0.7) < 0.01 } }, "\(paneAlphas())")
+        s.tintColor = NSColor(hex: "#0B3D91")!
+        XCTAssertTrue(waitUntil(2) {
+            self.wc.editorPanes.hosts.allSatisfy { $0.layer?.backgroundColor.flatMap { NSColor(cgColor: $0) }?.withAlphaComponent(1).hexString == "#0B3D91" }
+        })
+        s.transparencyEnabled = false
+        XCTAssertTrue(waitUntil(2) { paneAlphas() == [1, 1] }, "\(paneAlphas())")
+    }
+
     func testShowOnlyActiveTab() {
         openThree()
         wc.toggleSideBySide(at: 1)
