@@ -276,7 +276,10 @@ constexpr LineMarker::FoldPart PartForBar(bool markBefore, bool markAfter) {
 void MarginView::PaintOneMargin(Surface *surface, PRectangle rc, PRectangle rcOneMargin, const MarginStyle &marginStyle,
 	const EditModel &model, const ViewStyle &vs) const {
 	const Point ptOrigin = model.GetVisibleOriginInMain();
-	const Sci::Line lineStartPaint = static_cast<Sci::Line>(rcOneMargin.top + ptOrigin.y) / vs.lineHeight;
+	// [lastnote patch] Never start above the first line (drawing above the document happens with
+	// rubber-band / responsive-scrolling overdraw); see the matching clamp in EditView::PaintText.
+	const Sci::Line lineStartPaint = std::max<Sci::Line>(static_cast<Sci::Line>(rcOneMargin.top + ptOrigin.y) / vs.lineHeight,
+		-model.TopLineOfMain());
 	Sci::Line visibleLine = model.TopLineOfMain() + lineStartPaint;
 	XYPOSITION yposScreen = static_cast<XYPOSITION>(lineStartPaint * vs.lineHeight) - ptOrigin.y;
 	// Work out whether the top line is whitespace located after a

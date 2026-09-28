@@ -35,5 +35,10 @@ Bug fixes (found with Address Sanitizer + `LASTNOTE_STRESS`):
    CoreGraphics display-list replay crash seen on macOS 26.
 9. `scintilla/src/EditView.cxx` — `DrawTextBlob` draws the letters of LF/CR/control-char blobs
    in the (now transparent) back colour; use it opaque so the letters stay visible.
+10. `scintilla/src/EditView.cxx` — `PaintText` could start painting at line -1 when asked to draw
+   above the document (rubber-band scrolling / responsive-scrolling overdraw at the top), and
+   `LayoutLine` then wrote one byte before a heap buffer. That silent heap corruption was the cause
+   of LastNote's random crashes in AppKit/CoreGraphics/Metal code. The first painted line is now
+   clamped to 0. `MarginView::PaintOneMargin` gets the same clamp.
 
 When upgrading Scintilla, re-apply these.

@@ -1039,6 +1039,80 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         tick()
     }
 
+    /// Development aid (LASTNOTE_STRESS_SCROLL=seconds): real scroll-wheel events (as a trackpad or
+    /// mouse sends them) over the editor text, the line-number margin and the console.
+    func runScrollStress(seconds: Double) {
+        var rng = SystemRandomNumberGenerator()
+        let end = Date().addingTimeInterval(seconds)
+        let keepText = ProcessInfo.processInfo.environment["LASTNOTE_STRESS_KEEPTEXT"] == "1"
+        if !keepText {
+            setConsoleVisible(true)
+            console.run("for i in $(seq 1 3000); do echo \"scrollback line $i\"; done")
+        }
+        if !keepText, let doc = current {
+            doc.view.setString((1...3000).map { "line \($0): def fn(self, x):  # some text to scroll through" }.joined(separator: "\n"))
+            doc.setLanguage(Language.all.first { $0.name == "Python" }!)
+        }
+        var step = 0
+        func tick() {
+            guard Date() < end, let window, let content = window.contentView else {
+                print("scroll stress: done after \(step) steps")
+                exit(0)
+            }
+            step += 1
+            if !keepText, step % 400 == 0 { toggleSideBySide(at: 0) }  // change pane layout now and then
+            // Pick a target: editor text, margin (left edge of the editor) or console.
+            let targets: [(NSView, CGFloat)] = console.isHidden ? [(editorHost, 0.5), (editorHost, 0.02)]
+                : [(editorHost, 0.5), (editorHost, 0.02), (console.bodyView, 0.5)]
+            let (view, fx) = targets.randomElement(using: &rng)!
+            let r = view.convert(view.bounds, to: nil)
+            let pInWindow = NSPoint(x: r.minX + r.width * fx + 3, y: r.minY + r.height * CGFloat.random(in: 0.1...0.9, using: &rng))
+            let screenPoint = window.convertPoint(toScreen: pInWindow)
+            let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+            let dy = Int32.random(in: -40...40, using: &rng)
+            if ProcessInfo.processInfo.environment["LASTNOTE_STRESS_GESTURE"] == "1" {
+                // A trackpad-style gesture posted to the app's event queue: began, changed…, ended, then
+                // momentum began, changed…, ended. AppKit routes it (responsive scrolling path).
+                let loc = CGPoint(x: screenPoint.x, y: mainHeight - screenPoint.y)
+                func post(_ delta: Int32, phase: Int64, momentum: Int64) {
+                    guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else { return }
+                    cg.location = loc
+                    cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                    cg.setIntegerValueField(CGEventField(rawValue: 99)!, value: phase)      // kCGScrollWheelEventScrollPhase
+                    cg.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentum)  // kCGScrollWheelEventMomentumPhase
+                    cg.setIntegerValueField(CGEventField(rawValue: 91)!, value: Int64(window.windowNumber))
+                    cg.setIntegerValueField(CGEventField(rawValue: 92)!, value: Int64(window.windowNumber))
+                    if let e = NSEvent(cgEvent: cg) {
+                        let hit = content.superview?.hitTest(pInWindow) ?? content
+                        hit.scrollWheel(with: e)
+                    }
+                }
+                let sign: Int32 = Bool.random(using: &rng) ? 1 : -1
+                post(0, phase: 1, momentum: 0)                                         // began
+                for _ in 0..<Int.random(in: 3...12, using: &rng) { post(sign * Int32.random(in: 5...60, using: &rng), phase: 2, momentum: 0) } // changed
+                post(0, phase: 4, momentum: 0)                                         // ended
+                post(sign * 40, phase: 0, momentum: 1)                                 // momentum began
+                for i in 0..<Int.random(in: 5...25, using: &rng) { post(sign * Int32(max(1, 40 - i * 2)), phase: 0, momentum: 2) }
+                post(0, phase: 0, momentum: 3)                                         // momentum ended
+            } else if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: Int32.random(in: -3...3, using: &rng), wheel3: 0) {
+                cg.location = CGPoint(x: screenPoint.x, y: mainHeight - screenPoint.y)  // CG uses top-left origin
+                if let e = NSEvent(cgEvent: cg) {
+                    let hit = content.superview?.hitTest(pInWindow) ?? content
+                    hit.scrollWheel(with: e)
+                }
+            }
+            // Mouse movement over the same spot (cursor areas update as the content scrolls).
+            if let move = NSEvent.mouseEvent(with: .mouseMoved, location: pInWindow, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
+                window.sendEvent(move)
+            }
+            window.displayIfNeeded()
+            if step % 200 == 0, let v = current?.view { print("scroll stress: first visible line \(v.sci(SCI_GETFIRSTVISIBLELINE))") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.004) { tick() }
+        }
+        tick()
+    }
+
     /// Stress aid: a real click (mouse-down/up through the view's own handling) on a random tab or
     /// its × button. Skips tabs with unsaved changes so no save prompt appears.
     private func stressClick(in bar: TabBar, closeButton: Bool, rng: inout SystemRandomNumberGenerator, clicks: Int = 1) {

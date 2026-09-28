@@ -2512,7 +2512,11 @@ void EditView::PaintText(Surface *surfaceWindow, const EditModel &model, const V
 
 		const Point ptOrigin = model.GetVisibleOriginInMain();
 
-		const int screenLinePaintFirst = static_cast<int>(rcArea.top) / vsDraw.lineHeight;
+		// [lastnote patch] When macOS asks for drawing above the top of the document (rubber-band /
+		// responsive-scrolling overdraw), rcArea.top is negative; without the clamp the loop below
+		// lays out line -1 and writes before the start of a heap buffer, corrupting memory.
+		const int screenLinePaintFirst = std::max(static_cast<int>(rcArea.top) / vsDraw.lineHeight,
+			static_cast<int>(-model.TopLineOfMain()));
 		const int xOrigin = vsDraw.textStart - model.xOffset + static_cast<int>(ptOrigin.x);
 
 		const SelectionPosition posCaret = model.posDrag.IsValid() ? model.posDrag : model.sel.RangeMain().caret;

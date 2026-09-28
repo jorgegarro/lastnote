@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["LASTNOTE_SELFTEST"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [mainWindow] in mainWindow?.runSelfTest() }
         }
+        if let secs = ProcessInfo.processInfo.environment["LASTNOTE_STRESS_SCROLL"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [mainWindow] in mainWindow?.runScrollStress(seconds: secs) }
+        }
         if let secs = ProcessInfo.processInfo.environment["LASTNOTE_STRESS_EDIT"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [mainWindow] in mainWindow?.runEditStress(seconds: secs) }
         }
