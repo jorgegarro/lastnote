@@ -922,6 +922,123 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         tick()
     }
 
+    /// Development aid (LASTNOTE_STRESS_APPEARANCE=seconds): rapid appearance changes (like dragging
+    /// the opacity slider) while typing, scrolling and streaming console output.
+    func runAppearanceStress(seconds: Double) {
+        var rng = SystemRandomNumberGenerator()
+        let end = Date().addingTimeInterval(seconds)
+        let tints = ["#1B1F27", "#0B3D91", "#B3261E", "#2E7D32", "#5B2A86"]
+        setConsoleVisible(true)
+        console.run("for i in $(seq 1 200000); do echo \"line $i the quick brown fox jumps over the lazy dog\"; done")
+        if documents.count < 2 { newDocument(nil) }
+        if visibleDocs.count < 2 { toggleSideBySide(at: 0) }
+        var step = 0
+        func tick() {
+            guard Date() < end else {
+                print("appearance stress: done after \(step) steps")
+                exit(0)
+            }
+            step += 1
+            let s = AppSettings.shared
+            switch Int.random(in: 0..<12, using: &rng) {
+            case 10, 11:
+                // Move to another display (Retina 2x <-> external 1x changes the backing scale).
+                if let w = window, let target = NSScreen.screens.filter({ $0 != w.screen }).randomElement(using: &rng) {
+                    let f = target.visibleFrame
+                    w.setFrame(NSRect(x: f.minX + 20, y: f.minY + 20, width: min(1000, f.width - 40), height: min(700, f.height - 40)), display: true)
+                }
+            case 0, 1, 2: s.opacity = Double.random(in: 0.1...1, using: &rng)   // slider drag
+            case 3: s.tintColor = NSColor(hex: tints.randomElement(using: &rng)!)!
+            case 4: s.transparencyEnabled.toggle()
+            case 5: s.theme = s.theme == .dark ? .light : .dark
+            case 6: s.fontSize = Double(Int.random(in: 10...18, using: &rng))
+            case 7: current?.view.content().insertText("typing words here ", replacementRange: NSRange(location: NSNotFound, length: 0))
+            case 8: current?.view.sci(SCI_LINESCROLL, 0, Int.random(in: -20...20, using: &rng))
+            default: s.consoleFontSize = Double(Int.random(in: 10...16, using: &rng))
+            }
+            // Force a real display pass each step, as the screen would.
+            window?.displayIfNeeded()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.008) { tick() }
+        }
+        current?.view.setString(String(repeating: "def fn(self, x):  # comment\n    return x * 2\n\n", count: 400))
+        tick()
+    }
+
+    /// Development aid (LASTNOTE_STRESS_EDIT=seconds): editing features (undo storms, multi-cursor,
+    /// column selection, regex replace, folding, wrap with long lines, emoji/CJK, zoom, line
+    /// operations) plus terminals resized while flooding colour/Unicode output.
+    func runEditStress(seconds: Double) {
+        var rng = SystemRandomNumberGenerator()
+        let end = Date().addingTimeInterval(seconds)
+        setConsoleVisible(true)
+        let flood = "for i in $(seq 1 100000); do printf '\\033[3%dm%s 日本語 🎉 \\033[1m%05d\\033[0m %s\\n' $((i%8)) ═══ $i $(printf '%*s' $((i%120)) '' | tr ' ' x); done"
+        console.run(flood)
+        newConsoleTab(nil)
+        console.run(flood)
+        console.toggleSideBySide(at: 0)
+        if documents.count < 3 { newDocument(nil); newDocument(nil) }
+        let samples = ["héllo wörld ", "日本語テキスト ", "🎉🚀👨‍👩‍👧 ", "\t\tindent ", "if (x) { y(); }\n", String(repeating: "long", count: 800) + "\n", "\r\n", "  "]
+        var step = 0
+        func tick() {
+            guard Date() < end else {
+                print("edit stress: done after \(step) steps")
+                exit(0)
+            }
+            step += 1
+            guard let doc = current else { newDocument(nil); return DispatchQueue.main.async { tick() } }
+            let v = doc.view
+            if v.sci(SCI_GETLENGTH) > 40_000 { v.setString(String(repeating: "shrunk 日本 🎉 line\n", count: 40)) }
+            let len = v.sci(SCI_GETLENGTH)
+            func pos() -> Int { len == 0 ? 0 : Int.random(in: 0...len, using: &rng) }
+            switch Int.random(in: 0..<28, using: &rng) {
+            case 0, 1, 2: v.content().insertText(samples.randomElement(using: &rng)!, replacementRange: NSRange(location: NSNotFound, length: 0))
+            case 3: v.sci(SCI_UNDO)
+            case 4: v.sci(SCI_REDO)
+            case 5: for _ in 0..<Int.random(in: 1...20, using: &rng) { v.sci(SCI_UNDO) }
+            case 6: v.sci(SCI_SETSEL, pos(), pos())
+            case 7: // multiple carets then type
+                v.sci(SCI_SETSELECTION, pos(), pos())
+                for _ in 0..<3 { let p = pos(); v.sci(SCI_ADDSELECTION, p, p) }
+                v.content().insertText("✱", replacementRange: NSRange(location: NSNotFound, length: 0))
+            case 8: // rectangular selection then delete
+                v.sci(SCI_SETRECTANGULARSELECTIONANCHOR, pos())
+                v.sci(SCI_SETRECTANGULARSELECTIONCARET, pos())
+                v.sci(SCI_CLEAR)
+            case 9: findBar.regex.state = .on
+                findBar.findField.stringValue = ["(\\w+)", "[0-9]+", "^\\s+", "o", "(é|日)", ".*"].randomElement(using: &rng)!
+                findBar.replaceField.stringValue = ["<\\1>", "", "Ω", "\\1\\1"].randomElement(using: &rng)!
+                if Int.random(in: 0..<4, using: &rng) == 0 { findBar.replaceAll() } else { findBar.highlightAll() }
+                findBar.regex.state = .off
+            case 10: [#selector(foldAll(_:)), #selector(unfoldAll(_:))].randomElement(using: &rng).map { _ = perform($0, with: nil) }
+            case 11: AppSettings.shared.wordWrap.toggle()
+            case 12: v.sci(SCI_SETZOOM, Int.random(in: -10...20, using: &rng))
+            case 13: [#selector(duplicateLine(_:)), #selector(deleteLine(_:)), #selector(moveLinesUp(_:)), #selector(moveLinesDown(_:)),
+                      #selector(toggleComment(_:)), #selector(uppercaseSelection(_:)), #selector(joinLines(_:)), #selector(sortLinesAscending(_:)),
+                      #selector(trimTrailingWhitespace(_:))].randomElement(using: &rng).map { _ = perform($0, with: nil) }
+            case 14: doc.convertLineEndings(to: [LineEnding.lf, .crlf, .cr].randomElement(using: &rng)!)
+            case 15: v.sci(SCI_SELECTALL); v.sci(SCI_COPY); v.sci(SCI_GOTOPOS, pos()); v.sci(SCI_PASTE)
+            case 16: v.setString(String(repeating: "reset line with words 日本 🎉\n", count: 50))
+            case 17: doc.setLanguage(Language.all.randomElement(using: &rng)!)
+            case 18: v.sci(SCI_LINESCROLL, Int.random(in: -50...50, using: &rng), Int.random(in: -200...200, using: &rng))
+            case 19, 20: // resize the window (terminals re-layout while output floods)
+                if let w = window, let scr = w.screen?.visibleFrame {
+                    w.setFrame(NSRect(x: scr.minX, y: scr.minY, width: CGFloat.random(in: 520...scr.width, using: &rng),
+                                      height: CGFloat.random(in: 360...scr.height, using: &rng)), display: true)
+                }
+            case 21: if console.sessions.count > 0 { console.toggleSideBySide(at: Int.random(in: 0..<console.sessions.count, using: &rng)) }
+            case 22: if documents.count > 0 { toggleSideBySide(at: Int.random(in: 0..<documents.count, using: &rng)) }
+            case 23: if !documents.isEmpty { select(Int.random(in: 0..<documents.count, using: &rng)) }
+            case 24: AppSettings.shared.tabWidth = Int.random(in: 1...8, using: &rng)
+            case 25: doc.toggleBookmark(line: Int.random(in: 0..<max(1, v.sci(SCI_GETLINECOUNT)), using: &rng))
+            case 26: v.sci(SCI_SETSEL, pos(), pos()); v.sci(SCI_CUT)
+            default: AppSettings.shared.showWhitespace.toggle()
+            }
+            window?.displayIfNeeded()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.005) { tick() }
+        }
+        tick()
+    }
+
     /// Stress aid: a real click (mouse-down/up through the view's own handling) on a random tab or
     /// its × button. Skips tabs with unsaved changes so no save prompt appears.
     private func stressClick(in bar: TabBar, closeButton: Bool, rng: inout SystemRandomNumberGenerator, clicks: Int = 1) {
