@@ -480,6 +480,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         for url in urls {
             if let i = documents.firstIndex(where: { $0.url?.standardizedFileURL == url.standardizedFileURL }) {
                 select(i)
+                RecentFiles.shared.note(url)  // opening it again moves it to the top of Open Recent
                 continue
             }
             do {
@@ -493,7 +494,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                     selectedIndex = -1
                 }
                 addDocument(doc)
-                NSDocumentController.shared.noteNewRecentDocumentURL(url)
+                RecentFiles.shared.note(url)
             } catch {
                 presentError(error)
             }
@@ -562,7 +563,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         }
         do {
             try doc.save(to: target!)
-            NSDocumentController.shared.noteNewRecentDocumentURL(target!)
+            RecentFiles.shared.note(target!)
             refreshTitle()
             return true
         } catch {
@@ -1181,6 +1182,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     @objc func newDocument(_ sender: Any?) {
         untitledCounter += 1
         addDocument(Document(untitledNumber: untitledCounter))
+    }
+
+    /// File ▸ Open Recent ▸ <file>.
+    @objc func openRecentFile(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        guard FileManager.default.fileExists(atPath: path) else {
+            NSSound.beep()
+            RecentFiles.shared.remove(path)
+            return
+        }
+        open(urls: [URL(fileURLWithPath: path)])
     }
 
     @objc func openDocument(_ sender: Any?) {

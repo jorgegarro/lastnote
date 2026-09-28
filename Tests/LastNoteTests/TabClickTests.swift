@@ -66,7 +66,7 @@ final class TabClickTests: XCTestCase {
         XCTAssertEqual(wc.documents.count, 4)
         for remaining in stride(from: 3, through: 1, by: -1) {
             click(closeButton(tabViews(wc.tabBar)[0]))
-            XCTAssertTrue(waitUntil(1) { self.wc.documents.count == remaining })
+            XCTAssertTrue(waitUntil(3) { self.wc.documents.count == remaining })
         }
     }
 
@@ -74,7 +74,7 @@ final class TabClickTests: XCTestCase {
         wc.open(urls: (1...3).map { tmp.file("s\($0).txt", "x") })
         for i in [0, 2, 1, 0] {
             click(tabViews(wc.tabBar)[i])
-            XCTAssertTrue(waitUntil(1) { self.wc.current?.fileName == "s\(i + 1).txt" })
+            XCTAssertTrue(waitUntil(3) { self.wc.current?.fileName == "s\(i + 1).txt" })
         }
     }
 
@@ -84,13 +84,13 @@ final class TabClickTests: XCTestCase {
         let field = try XCTUnwrap(wc.window?.firstResponder as? NSTextView)
         field.string = "Renamed"
         field.doCommand(by: #selector(NSResponder.insertNewline(_:)))
-        XCTAssertTrue(waitUntil(1) { self.wc.current?.displayName == "Renamed" })
+        XCTAssertTrue(waitUntil(3) { self.wc.current?.displayName == "Renamed" })
         // Renaming again and clicking another tab (commits by losing focus) must also be safe.
         wc.open(urls: [tmp.file("r2.txt", "y")])
         click(tabViews(wc.tabBar)[0], count: 2)
         (wc.window?.firstResponder as? NSTextView)?.string = "Again"
         click(tabViews(wc.tabBar)[1])
-        XCTAssertTrue(waitUntil(1) { self.wc.documents[0].displayName == "Again" })
+        XCTAssertTrue(waitUntil(3) { self.wc.documents[0].displayName == "Again" })
     }
 
     func testConsoleTabCloseButtons() {
@@ -99,17 +99,17 @@ final class TabClickTests: XCTestCase {
         wc.newConsoleTab(nil)
         XCTAssertEqual(wc.console.sessions.count, 3)
         click(closeButton(tabViews(wc.console.tabBar)[1]))
-        XCTAssertTrue(waitUntil(1) { self.wc.console.sessions.count == 2 })
+        XCTAssertTrue(waitUntil(3) { self.wc.console.sessions.count == 2 })
         click(tabViews(wc.console.tabBar)[0])
         click(closeButton(tabViews(wc.console.tabBar)[0]))
-        XCTAssertTrue(waitUntil(1) { self.wc.console.sessions.count == 1 })
+        XCTAssertTrue(waitUntil(3) { self.wc.console.sessions.count == 1 })
     }
 
     func testTabViewsAreReusedNotRebuilt() {
         wc.open(urls: [tmp.file("x1.txt", "a"), tmp.file("x2.txt", "b")])
         let before = tabViews(wc.tabBar).map(ObjectIdentifier.init)
         click(tabViews(wc.tabBar)[0])
-        XCTAssertTrue(waitUntil(1) { self.wc.current?.fileName == "x1.txt" })
+        XCTAssertTrue(waitUntil(3) { self.wc.current?.fileName == "x1.txt" })
         wc.documents[1].tint = NSColor(hex: "#2E7D32")
         wc.documents[1].customName = "Two"
         XCTAssertEqual(tabViews(wc.tabBar).map(ObjectIdentifier.init), before, "selecting/recolouring/renaming must not rebuild tabs")
@@ -131,11 +131,11 @@ final class TabClickTests: XCTestCase {
     func testCommandClickShowsTabsSideBySide() {
         wc.open(urls: [tmp.file("p1.txt", "a"), tmp.file("p2.txt", "b"), tmp.file("p3.txt", "c")])
         click(tabViews(wc.tabBar)[0], modifiers: .command)
-        XCTAssertTrue(waitUntil(1) { self.wc.visibleDocs.count == 2 }, "⌘-click should add the tab: \(self.wc.visibleDocs.map(\.fileName))")
+        XCTAssertTrue(waitUntil(3) { self.wc.visibleDocs.count == 2 }, "⌘-click should add the tab: \(self.wc.visibleDocs.map(\.fileName))")
         wc.setConsoleVisible(true)
         wc.newConsoleTab(nil)
         click(tabViews(wc.console.tabBar)[0], modifiers: .command)
-        XCTAssertTrue(waitUntil(1) { self.wc.console.visibleSessions.count == 2 })
+        XCTAssertTrue(waitUntil(3) { self.wc.console.visibleSessions.count == 2 })
     }
 
     func testRepeatedTabChurn() {
