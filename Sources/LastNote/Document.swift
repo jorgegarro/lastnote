@@ -34,7 +34,7 @@ extension ScintillaView {
         return buffer.withUnsafeMutableBufferPointer { buf -> String in
             var range = Sci_TextRangeFull(chrg: Sci_CharacterRangeFull(cpMin: start, cpMax: end),
                                           lpstrText: buf.baseAddress)
-            withUnsafeMutablePointer(to: &range) { sci(SCI_GETTEXTRANGEFULL, 0, Int(bitPattern: $0)) }
+            _ = withUnsafeMutablePointer(to: &range) { sci(SCI_GETTEXTRANGEFULL, 0, Int(bitPattern: $0)) }
             return String(cString: buf.baseAddress!)
         }
     }
