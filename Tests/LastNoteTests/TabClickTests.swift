@@ -26,12 +26,12 @@ final class TabClickTests: XCTestCase {
     }
 
     /// Mouse down + up at the centre of a view, through NSWindow.sendEvent.
-    private func click(_ view: NSView, count: Int = 1) {
+    private func click(_ view: NSView, count: Int = 1, modifiers: NSEvent.ModifierFlags = []) {
         guard let window = view.window else { return XCTFail("view not in a window") }
         window.layoutIfNeeded()
         let p = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
         func event(_ type: NSEvent.EventType, _ c: Int) -> NSEvent {
-            NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            NSEvent.mouseEvent(with: type, location: p, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
                                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: c, pressure: 1)!
         }
         // The test runner's window can't become key, so NSWindow would swallow the clicks; deliver
@@ -126,6 +126,16 @@ final class TabClickTests: XCTestCase {
         waitUntil(0.3) { false }
         wc.tabBar.layoutSubtreeIfNeeded()
         XCTAssertEqual(tab.frame.width, width, accuracy: 1, "tab should shrink back after renaming")
+    }
+
+    func testCommandClickShowsTabsSideBySide() {
+        wc.open(urls: [tmp.file("p1.txt", "a"), tmp.file("p2.txt", "b"), tmp.file("p3.txt", "c")])
+        click(tabViews(wc.tabBar)[0], modifiers: .command)
+        XCTAssertTrue(waitUntil(1) { self.wc.visibleDocs.count == 2 }, "⌘-click should add the tab: \(self.wc.visibleDocs.map(\.fileName))")
+        wc.setConsoleVisible(true)
+        wc.newConsoleTab(nil)
+        click(tabViews(wc.console.tabBar)[0], modifiers: .command)
+        XCTAssertTrue(waitUntil(1) { self.wc.console.visibleSessions.count == 2 })
     }
 
     func testRepeatedTabChurn() {

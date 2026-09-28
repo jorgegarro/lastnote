@@ -107,6 +107,9 @@ final class ConsolePanel: NSView {
     private let colorButton = ConsolePanel.headerButton("paintpalette", "Console tab colour")
     private let hideButton = ConsolePanel.headerButton("chevron.down", "Hide console (⌃`)")
     private let fontButton = ConsolePanel.headerButton("textformat", "Console font & colours")
+    private let splitButton = ConsolePanel.headerButton("rectangle.split.2x1", "Console tabs side by side")
+    /// Builds the side-by-side menu (provided by the window, which owns the console-tab actions).
+    var splitMenuProvider: (() -> NSMenu)?
     private lazy var fontPopover: NSPopover = {
         let p = NSPopover()
         p.behavior = .transient
@@ -142,7 +145,9 @@ final class ConsolePanel: NSView {
         hideButton.action = #selector(hideConsole)
         fontButton.target = self
         fontButton.action = #selector(showFontPopover(_:))
-        let buttons = NSStackView(views: [fontButton, colorButton, hideButton])
+        splitButton.target = self
+        splitButton.action = #selector(showSplitMenu(_:))
+        let buttons = NSStackView(views: [splitButton, fontButton, colorButton, hideButton])
         buttons.spacing = 4
         buttons.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(buttons)
@@ -274,6 +279,30 @@ final class ConsolePanel: NSView {
         reloadTabs()
         focus()
         onChange?()
+    }
+
+    /// A new shell in a pane next to the current ones.
+    func addSessionSideBySide() {
+        let previous = visibleSessions
+        guard previous.count < PaneArea.maxPanes else { NSSound.beep(); return }
+        let s = addSession()  // shows in the active pane…
+        visibleSessions = previous + [s]  // …so put the previous panes back and add it as a new one
+        layoutPanes()
+        reloadTabs()
+        focus()
+        onChange?()
+    }
+
+    /// Show the next console tab that isn't visible yet; with none left, open a new one.
+    func addNextSideBySide() {
+        guard visibleSessions.count < PaneArea.maxPanes else { NSSound.beep(); return }
+        let start = max(activeIndex, 0)
+        let order = sessions.indices.map { (start + 1 + $0) % sessions.count }
+        if let i = order.first(where: { i in !visibleSessions.contains { $0 === sessions[i] } }) {
+            toggleSideBySide(at: i)
+        } else {
+            addSessionSideBySide()
+        }
     }
 
     func showOnlyActive() {
@@ -420,6 +449,11 @@ final class ConsolePanel: NSView {
         return menu
     }
 
+    @objc func showSplitMenu(_ sender: Any?) {
+        guard let menu = splitMenuProvider?() else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: splitButton.bounds.height + 4), in: splitButton)
+    }
+
     @objc func showFontPopover(_ sender: Any?) {
         if fontPopover.isShown { fontPopover.close(); return }
         fontPopover.show(relativeTo: fontButton.bounds, of: fontButton, preferredEdge: .maxY)
@@ -475,7 +509,7 @@ final class ConsolePanel: NSView {
         let theme = Theme.named(AppSettings.shared.theme)
         for s in sessions { s.applySettings(background: regionColor(s.tint)) }
         header.layer?.backgroundColor = theme.chrome.cgColor
-        for b in [fontButton, colorButton, hideButton] { b.contentTintColor = theme.chromeText }
+        for b in [splitButton, fontButton, colorButton, hideButton] { b.contentTintColor = theme.chromeText }
         reloadTabs()
     }
 }

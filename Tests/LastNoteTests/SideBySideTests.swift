@@ -127,7 +127,54 @@ final class SideBySideTests: XCTestCase {
         XCTAssertTrue(titles.contains("Show Only This Tab"))
     }
 
+    func testSplitCommandWithOnlyOneTabCreatesANewOne() {
+        XCTAssertEqual(wc.documents.count, 1)
+        wc.focusEditor(nil)
+        wc.splitAddNextTab(nil)
+        XCTAssertEqual(wc.documents.count, 2)
+        XCTAssertEqual(wc.visibleDocs.count, 2)
+        XCTAssertTrue(wc.documents.allSatisfy(onScreen))
+        wc.splitAddNextTab(nil)
+        XCTAssertEqual(wc.visibleDocs.count, 3)
+        wc.splitAddNextTab(nil)  // already three: nothing more
+        XCTAssertEqual(wc.visibleDocs.count, 3)
+        XCTAssertEqual(wc.documents.count, 3)
+    }
+
+    func testSplitCommandPrefersExistingHiddenTabs() {
+        openThree()
+        wc.focusEditor(nil)
+        wc.splitAddNextTab(nil)
+        XCTAssertEqual(wc.visibleDocs.map(\.fileName), ["a.txt", "b.txt"])
+        XCTAssertEqual(wc.documents.count, 4, "no new tab when a hidden one exists")
+    }
+
+    func testSplitMenuListsTabsWithCheckmarks() {
+        openThree()
+        wc.toggleSideBySide(at: 2)
+        let menu = wc.splitMenu(forConsole: false)
+        let items = menu.items.filter { ["a.txt", "b.txt", "c.txt", "d.txt"].contains($0.title) }
+        XCTAssertEqual(items.map(\.state), [.on, .off, .on, .off])
+        // Picking an unchecked tab shows it; picking a checked one hides it.
+        (items[1] as? ClosureMenuItem).map { _ = $0.target?.perform($0.action) }
+        XCTAssertEqual(wc.visibleDocs.map(\.fileName), ["a.txt", "c.txt", "b.txt"])
+        (items[0] as? ClosureMenuItem).map { _ = $0.target?.perform($0.action) }
+        XCTAssertEqual(wc.visibleDocs.map(\.fileName), ["c.txt", "b.txt"])
+    }
+
     // MARK: Console
+
+    func testConsoleSplitWithOneShellOpensASecondSideBySide() throws {
+        wc.setConsoleVisible(true)
+        XCTAssertEqual(wc.console.sessions.count, 1)
+        wc.console.focus()
+        wc.splitAddNextTab(nil)  // ⌘\ with the console focused
+        XCTAssertEqual(wc.console.sessions.count, 2)
+        XCTAssertEqual(wc.console.visibleSessions.count, 2)
+        XCTAssertTrue(wc.console.sessions.allSatisfy { $0.container.window != nil })
+        let menu = wc.splitMenu(forConsole: true)
+        XCTAssertEqual(menu.items.filter { $0.state == .on }.count, 2)
+    }
 
     private func terminalText(_ s: ConsoleSession) -> String {
         String(data: s.terminal.getTerminal().getBufferAsData(), encoding: .utf8) ?? ""

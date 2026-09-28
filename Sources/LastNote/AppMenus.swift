@@ -141,6 +141,8 @@ enum AppMenus {
         m.addItem(item("Dark Text Colours", #selector(MainWindowController.setDarkTheme(_:))))
         m.addItem(item("Light Text Colours", #selector(MainWindowController.setLightTheme(_:))))
         m.addItem(.separator())
+        m.addItem(item("Split: Add Next Tab Side by Side", #selector(MainWindowController.splitAddNextTab(_:)), "\\"))
+        m.addItem(item("Side by Side…", #selector(MainWindowController.showSplitMenu(_:))))
         m.addItem(item("Show Only the Active Tab (Unsplit)", #selector(MainWindowController.showOnlyActiveTab(_:)), "\\", [.command, .shift]))
         m.addItem(.separator())
         m.addItem(item("Show Console", #selector(MainWindowController.toggleConsole(_:)), "`", .control))

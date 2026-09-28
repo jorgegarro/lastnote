@@ -32,8 +32,9 @@ Requires Xcode 16+ / Swift 6 toolchain, macOS 13+.
 - EOL conversion (CRLF / LF / CR), encoding detection
 - Console: full interactive shells in **tabs** (⌃\` show/hide, ⌃⇧\` new tab, ⌘W closes the focused console tab),
   cd to file's folder, **Run File in Console** (⌘R)
-- **Side by side**: show up to 3 editor tabs, or up to 3 console tabs, next to each other — ⌘-click a tab
-  (or right-click ▸ Show Side by Side); ⌘-click again or the pane's × to remove it; ⇧⌘\\ shows only the
+- **Side by side**: show up to 3 editor tabs, or up to 3 console tabs, next to each other — the **Split**
+  button (icon bar / console bar) lists tabs to tick, ⌘\\ adds the next tab (creating one if needed),
+  or ⌘-click a tab (or right-click ▸ Show Side by Side); ⌘-click again or the pane's × to remove it; ⇧⌘\\ shows only the
   active tab. Each pane keeps its tab colour; clicking into a pane makes it active; sessions remember it
 - **Tab names**: double-click any editor or console tab (or right-click / Control-click → Rename Tab…, ⇧⌘R)
   to give it a name; editor-tab names are labels only (the file isn't renamed) and are remembered per file

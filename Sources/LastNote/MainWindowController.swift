@@ -168,6 +168,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             self.setConsoleVisible(false)
         }
         console.onChange = { [weak self] in self?.updateTintMask() }
+        console.splitMenuProvider = { [weak self] in self?.splitMenu(forConsole: true) ?? NSMenu() }
 
         // Editor and console areas paint their own (per-tab) tint; the window tint covers the rest.
         tintView.holes = [editorHost, console.bodyView]
@@ -327,6 +328,85 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         refreshTitle()
         refreshStatus()
         if let cur = current { window?.makeFirstResponder(cur.view.content()) }
+    }
+
+    /// A new untitled note in a pane next to the current ones.
+    @objc func newDocumentSideBySide(_ sender: Any?) {
+        let previous = visibleDocs
+        guard previous.count < PaneArea.maxPanes else { NSSound.beep(); return }
+        newDocument(nil)  // shows in the active pane…
+        guard let doc = current else { return }
+        visibleDocs = previous + [doc]  // …so put the previous panes back and add it as a new one
+        layoutEditorPanes()
+        refreshTabs()
+        window?.makeFirstResponder(doc.view.content())
+    }
+
+    /// ⌘\: show the next tab that isn't visible yet next to the others (in the editor or the
+    /// console, whichever has focus). With no other tab to show, a new one is created.
+    @objc func splitAddNextTab(_ sender: Any?) {
+        if console.containsFirstResponder {
+            console.addNextSideBySide()
+            return
+        }
+        guard visibleDocs.count < PaneArea.maxPanes else { NSSound.beep(); return }
+        let start = selectedIndex
+        let order = documents.indices.map { (start + 1 + $0) % documents.count }
+        if let i = order.first(where: { i in !visibleDocs.contains { $0 === documents[i] } }) {
+            toggleSideBySide(at: i)
+        } else {
+            newDocumentSideBySide(nil)
+        }
+    }
+
+    /// Menu listing the tabs of one area with checkmarks for the ones shown side by side.
+    func splitMenu(forConsole: Bool) -> NSMenu {
+        let menu = NSMenu(title: "Side by Side")
+        let header = NSMenuItem(title: forConsole ? "Console tabs side by side (up to 3):" : "Tabs side by side (up to 3):", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        if forConsole {
+            for (i, s) in console.sessions.enumerated() {
+                let item = ClosureMenuItem(title: s.name) { [weak self] in self?.console.toggleSideBySide(at: i) }
+                item.state = console.visibleSessions.contains { $0 === s } ? .on : .off
+                item.image = s.tint.map { TintMenu.swatch($0) }
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+            menu.addItem(ClosureMenuItem(title: "New Console Tab Side by Side") { [weak self] in
+                self?.setConsoleVisible(true)
+                self?.console.addSessionSideBySide()
+            })
+            menu.addItem(ClosureMenuItem(title: "Show Only the Active Console Tab") { [weak self] in self?.console.showOnlyActive() })
+        } else {
+            for (i, d) in documents.enumerated() {
+                let item = ClosureMenuItem(title: d.displayName) { [weak self] in self?.toggleSideBySide(at: i) }
+                item.state = visibleDocs.contains { $0 === d } ? .on : .off
+                item.image = d.tint.map { TintMenu.swatch($0) }
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+            menu.addItem(ClosureMenuItem(title: "New Tab Side by Side") { [weak self] in self?.newDocumentSideBySide(nil) })
+            menu.addItem(ClosureMenuItem(title: "Show Only the Active Tab") { [weak self] in
+                guard let self, let cur = self.current else { return }
+                self.visibleDocs = [cur]
+                self.layoutEditorPanes()
+                self.refreshTabs()
+            })
+        }
+        menu.addItem(.separator())
+        let tip = NSMenuItem(title: "Tip: ⌘-click a tab to show it side by side", action: nil, keyEquivalent: "")
+        tip.isEnabled = false
+        menu.addItem(tip)
+        return menu
+    }
+
+    /// Icon-bar Split button: the menu for whichever area has focus.
+    @objc func showSplitMenu(_ sender: Any?) {
+        let menu = splitMenu(forConsole: console.containsFirstResponder)
+        if let button = sender as? NSView ?? iconBar.buttons[#selector(showSplitMenu(_:))] {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: button)
+        }
     }
 
     /// Back to one pane showing the active tab.

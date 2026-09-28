@@ -33,6 +33,7 @@ final class IconBar: NSView {
             Item(symbol: "arrow.down.to.line", tip: "Go to Line (⌘L)", action: #selector(MainWindowController.goToLine(_:))),
         ],
         [
+            Item(symbol: "rectangle.split.3x1", tip: "Side by Side — show up to 3 tabs at once (⌘\\ adds the next tab)", action: #selector(MainWindowController.showSplitMenu(_:))),
             Item(symbol: "plus.magnifyingglass", tip: "Zoom In (⌘=)", action: #selector(MainWindowController.zoomIn(_:))),
             Item(symbol: "minus.magnifyingglass", tip: "Zoom Out (⌘-)", action: #selector(MainWindowController.zoomOut(_:))),
         ],
