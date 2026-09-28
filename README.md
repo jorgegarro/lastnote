@@ -14,6 +14,7 @@ optional transparent, tinted window.
 swift run                 # dev run (unbundled)
 scripts/bundle.sh         # release build -> build/LastNote.app
 scripts/install.sh        # build + install to /Applications and launch
+scripts/make_dmg.sh       # universal (Apple Silicon + Intel) build -> build/LastNote-<version>.dmg to share
 open build/LastNote.app
 swift test                # unit + end-to-end tests (real window, real shells)
 scripts/make_icns.sh      # regenerate the app icon from scripts/make_icon.swift
@@ -59,3 +60,10 @@ Requires Xcode 16+ / Swift 6 toolchain, macOS 13+.
 
 `LASTNOTE_SNAPSHOT=/tmp/out.png LASTNOTE_SNAPSHOT_QUIT=1 swift run LastNote file.txt` writes a PNG of
 the window after launch (add `LASTNOTE_SELFTEST=1` to exercise Run-in-console and Find first).
+
+## Sharing
+
+`scripts/make_dmg.sh` creates `build/LastNote-<version>.dmg` (drag-to-Applications, with a
+"How to open" note). Without an Apple Developer ID the app is ad-hoc signed, so recipients must
+approve it once in System Settings ▸ Privacy & Security ▸ Open Anyway. With a Developer ID, set
+`LASTNOTE_SIGN_ID` before running the script, then notarize the .dmg so it opens without warnings.
