@@ -13,6 +13,8 @@ enum AppMenus {
         let lang = languageMenu()
         lang.title = "Language"
         main.addItem(submenu(lang))
+        main.addItem(submenu(MacroMenuController.shared.menu))
+        main.addItem(submenu(SessionMenuController.shared.menu))
         main.addItem(submenu(runMenu()))
         let window = windowMenu()
         main.addItem(submenu(window))
@@ -192,5 +194,57 @@ enum AppMenus {
         m.addItem(item("Next Tab", #selector(MainWindowController.selectNextTab(_:)), "\t", .control))
         m.addItem(item("Previous Tab", #selector(MainWindowController.selectPreviousTab(_:)), "\t", [.control, .shift]))
         return m
+    }
+}
+
+/// The Macro menu. Saved macros are listed (⌃⌥1…9) and the menu is rebuilt whenever the
+/// macro library changes, so their shortcuts work without opening the menu first.
+final class MacroMenuController: NSObject {
+    static let shared = MacroMenuController()
+    let menu = NSMenu(title: "Macro")
+    private var observer: NSObjectProtocol?
+
+    private override init() {
+        super.init()
+        rebuild()
+        observer = NotificationCenter.default.addObserver(forName: MacroRecorder.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.rebuild()
+        }
+    }
+
+    func rebuild() {
+        menu.removeAllItems()
+        func add(_ title: String, _ action: Selector, _ key: String = "", _ mods: NSEvent.ModifierFlags = []) -> NSMenuItem {
+            let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            i.keyEquivalentModifierMask = mods
+            menu.addItem(i)
+            return i
+        }
+        _ = add("Start Recording", #selector(MainWindowController.toggleMacroRecording(_:)), "r", [.control, .shift])
+        _ = add("Playback", #selector(MainWindowController.playMacro(_:)), "p", [.control, .shift])
+        _ = add("Save Current Recorded Macro…", #selector(MainWindowController.saveCurrentMacro(_:)))
+        _ = add("Run a Macro Multiple Times…", #selector(MainWindowController.runMacroMultipleTimes(_:)))
+        menu.addItem(.separator())
+        let saved = MacroRecorder.loadSaved()
+        if saved.isEmpty {
+            let none = NSMenuItem(title: "No saved macros", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+            return
+        }
+        for (i, m) in saved.enumerated() {
+            let item = add(m.name, #selector(MainWindowController.runSavedMacro(_:)), i < 9 ? "\(i + 1)" : "", i < 9 ? [.control, .option] : [])
+            item.representedObject = m.name
+        }
+        menu.addItem(.separator())
+        let delete = NSMenuItem(title: "Delete Saved Macro", action: nil, keyEquivalent: "")
+        let sub = NSMenu(title: "Delete Saved Macro")
+        for m in saved {
+            let i = NSMenuItem(title: m.name, action: #selector(MainWindowController.deleteSavedMacro(_:)), keyEquivalent: "")
+            i.representedObject = m.name
+            sub.addItem(i)
+        }
+        delete.submenu = sub
+        menu.addItem(delete)
     }
 }

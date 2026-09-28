@@ -28,6 +28,12 @@ final class AppSettings: ObservableObject {
     @Published var fontName: String { didSet { save("fontName", fontName) } }
     @Published var fontSize: Double { didSet { save("fontSize", fontSize) } }
     @Published var consoleFontSize: Double { didSet { save("consoleFontSize", consoleFontSize) } }
+    /// Console font family; "" = same as the editor font.
+    @Published var consoleFontName: String { didSet { save("consoleFontName", consoleFontName) } }
+    /// Console text colour; nil = the theme's text colour.
+    @Published var consoleTextColor: NSColor? { didSet { save("consoleTextColor", consoleTextColor?.hexString ?? "") } }
+    /// Console background; nil = the window tint. Console-tab colours still override it per tab.
+    @Published var consoleBackgroundColor: NSColor? { didSet { save("consoleBackgroundColor", consoleBackgroundColor?.hexString ?? "") } }
     @Published var wordWrap: Bool { didSet { save("wordWrap", wordWrap) } }
     @Published var showWhitespace: Bool { didSet { save("showWhitespace", showWhitespace) } }
     @Published var showLineEndings: Bool { didSet { save("showLineEndings", showLineEndings) } }
@@ -50,6 +56,7 @@ final class AppSettings: ObservableObject {
             "fontName": "Menlo",
             "fontSize": 13.0,
             "consoleFontSize": 12.0,
+            "consoleFontName": "",
             "wordWrap": false,
             "showWhitespace": false,
             "showLineEndings": false,
@@ -66,6 +73,9 @@ final class AppSettings: ObservableObject {
         fontName = defaults.string(forKey: "fontName") ?? "Menlo"
         fontSize = defaults.double(forKey: "fontSize")
         consoleFontSize = defaults.double(forKey: "consoleFontSize")
+        consoleFontName = defaults.string(forKey: "consoleFontName") ?? ""
+        consoleTextColor = NSColor(hex: defaults.string(forKey: "consoleTextColor") ?? "")
+        consoleBackgroundColor = NSColor(hex: defaults.string(forKey: "consoleBackgroundColor") ?? "")
         wordWrap = defaults.bool(forKey: "wordWrap")
         showWhitespace = defaults.bool(forKey: "showWhitespace")
         showLineEndings = defaults.bool(forKey: "showLineEndings")
@@ -121,7 +131,7 @@ final class AppSettings: ObservableObject {
     }
 
     var consoleFont: NSFont {
-        Self.font(family: fontName, size: consoleFontSize)
+        Self.font(family: consoleFontName.isEmpty ? fontName : consoleFontName, size: consoleFontSize)
     }
 }
 

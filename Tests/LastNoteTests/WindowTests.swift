@@ -273,6 +273,20 @@ final class WindowTests: XCTestCase {
         XCTAssertTrue(waitUntil(3) { window.frame.width > 900 + 50 }, "window didn't zoom: \(window.frame)")
     }
 
+    func testWindowCanShrinkToItsMinimumSize() throws {
+        let window = try XCTUnwrap(wc.window)
+        wc.open(urls: [tmp.file("a.txt", "a"), tmp.file("b.txt", "b")])
+        wc.setConsoleVisible(true)
+        wc.showReplace(nil)  // the find/replace bar is the widest piece of UI
+        for _ in 0..<2 {
+            window.setFrame(NSRect(origin: window.frame.origin, size: window.minSize), display: true)
+            waitUntil(0.3) { false }
+            XCTAssertEqual(window.frame.width, window.minSize.width, accuracy: 1, "something forces a wider window")
+            XCTAssertEqual(window.frame.height, window.minSize.height, accuracy: 1)
+            wc.hideFindBar()
+        }
+    }
+
     // MARK: Menus
 
     func testEveryMenuActionIsHandled() {

@@ -6,6 +6,8 @@ import SciKit
 final class FindBar: NSView, NSSearchFieldDelegate {
     var document: () -> Document? = { nil }
     var onClose: (() -> Void)?
+    /// A user-triggered find/replace, for macro recording.
+    var onRecord: ((MacroStep) -> Void)?
 
     let findField = NSSearchField()
     let replaceField = NSTextField()
@@ -33,7 +35,11 @@ final class FindBar: NSView, NSSearchFieldDelegate {
         replaceField.placeholderString = "Replace with"
         replaceField.delegate = self
         for f in [findField, replaceField] as [NSTextField] {
-            f.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+            // Preferred width only: the bar must never stop the window from getting narrow.
+            let w = f.widthAnchor.constraint(greaterThanOrEqualToConstant: 260)
+            w.priority = .defaultLow
+            w.isActive = true
+            f.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         }
         for b in [matchCase, wholeWord, regex] {
             b.target = self
@@ -52,6 +58,11 @@ final class FindBar: NSView, NSSearchFieldDelegate {
         for b in [replaceOne, replaceAll] { b.controlSize = .small; b.bezelStyle = .rounded }
         replaceRow = NSStackView(views: [replaceField, replaceOne, replaceAll, NSView()])
         for r in [findRow, replaceRow!] { r.spacing = 6; r.orientation = .horizontal }
+        // On narrow windows the options and the match count drop out before anything else.
+        for v in [regex, wholeWord, matchCase, countLabel] as [NSView] {
+            findRow.setVisibilityPriority(.detachOnlyIfNecessary, for: v)
+        }
+        for r in [findRow, replaceRow!] { r.setClippingResistancePriority(.defaultLow, for: .horizontal) }
         rows = NSStackView(views: [findRow, replaceRow])
         rows.orientation = .vertical
         rows.alignment = .leading
@@ -110,10 +121,31 @@ final class FindBar: NSView, NSSearchFieldDelegate {
     }
 
     @discardableResult
-    @objc func findNext() -> Bool { find(forward: true) }
+    @objc func findNext() -> Bool { record(.next); return find(forward: true) }
 
     @discardableResult
-    @objc func findPrevious() -> Bool { find(forward: false) }
+    @objc func findPrevious() -> Bool { record(.previous); return find(forward: false) }
+
+    private func record(_ action: MacroStep.FindAction) {
+        onRecord?(MacroStep(kind: .find, findAction: action, find: findField.stringValue, replace: replaceField.stringValue,
+                            matchCase: matchCase.state == .on, wholeWord: wholeWord.state == .on, regex: regex.state == .on))
+    }
+
+    /// Replay a recorded find/replace step (sets the fields like Notepad++'s dialog would).
+    func perform(_ step: MacroStep) {
+        findField.stringValue = step.find ?? ""
+        replaceField.stringValue = step.replace ?? ""
+        matchCase.state = step.matchCase ? .on : .off
+        wholeWord.state = step.wholeWord ? .on : .off
+        regex.state = step.regex ? .on : .off
+        switch step.findAction {
+        case .next: _ = find(forward: true)
+        case .previous: _ = find(forward: false)
+        case .replace: replaceOneNow()
+        case .replaceAll: replaceAllNow()
+        case nil: break
+        }
+    }
 
     private func find(forward: Bool) -> Bool {
         guard let v = document()?.view, !needle.isEmpty else { return false }
@@ -134,6 +166,11 @@ final class FindBar: NSView, NSSearchFieldDelegate {
     }
 
     @objc func replaceOne() {
+        record(.replace)
+        replaceOneNow()
+    }
+
+    private func replaceOneNow() {
         guard let v = document()?.view, !needle.isEmpty else { return }
         let selStart = v.sci(SCI_GETSELECTIONSTART), selEnd = v.sci(SCI_GETSELECTIONEND)
         // Replace only if the current selection is itself a match.
@@ -143,11 +180,16 @@ final class FindBar: NSView, NSSearchFieldDelegate {
             v.sci(message, replacement.utf8.count, string: replacement)
             v.sci(SCI_SETSEL, v.sci(SCI_GETTARGETEND), v.sci(SCI_GETTARGETEND))
         }
-        findNext()
+        _ = find(forward: true)
         highlightAll()
     }
 
     @objc func replaceAll() {
+        record(.replaceAll)
+        replaceAllNow()
+    }
+
+    private func replaceAllNow() {
         guard let v = document()?.view, !needle.isEmpty else { return }
         let message = regex.state == .on ? SCI_REPLACETARGETRE : SCI_REPLACETARGET
         let replacement = replaceField.stringValue
@@ -202,7 +244,7 @@ final class FindBar: NSView, NSSearchFieldDelegate {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
             if control === replaceField { replaceOne(); return true }
-            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true { findPrevious() } else { findNext() }
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true { _ = findPrevious() } else { _ = findNext() }
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             closeBar()

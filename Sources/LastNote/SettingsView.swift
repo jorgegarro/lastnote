@@ -92,13 +92,16 @@ struct AppearanceControls: View {
     }
 }
 
+/// Monospaced font families installed on this Mac.
+let monospacedFontFamilies: [String] = NSFontManager.shared.availableFontFamilies.filter { family in
+    guard let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 12) else { return false }
+    return font.isFixedPitch || family.localizedCaseInsensitiveContains("mono")
+}
+
 struct EditorSettingsControls: View {
     @ObservedObject var settings = AppSettings.shared
 
-    private static let monospacedFamilies: [String] = NSFontManager.shared.availableFontFamilies.filter { family in
-        guard let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 12) else { return false }
-        return font.isFixedPitch || family.localizedCaseInsensitiveContains("mono")
-    }
+    private static var monospacedFamilies: [String] { monospacedFontFamilies }
 
     var body: some View {
         Form {
@@ -118,6 +121,49 @@ struct EditorSettingsControls: View {
     }
 }
 
+/// Console font, size, text colour and background.
+struct ConsoleSettingsControls: View {
+    @ObservedObject var settings = AppSettings.shared
+
+    private func colorBinding(_ keyPath: ReferenceWritableKeyPath<AppSettings, NSColor?>, fallback: NSColor) -> Binding<Color> {
+        Binding(get: { Color(nsColor: settings[keyPath: keyPath] ?? fallback) },
+                set: { settings[keyPath: keyPath] = NSColor($0).usingColorSpace(.sRGB) ?? NSColor($0) })
+    }
+
+    var body: some View {
+        let theme = Theme.named(settings.theme)
+        Form {
+            Picker("Font", selection: $settings.consoleFontName) {
+                Text("Same as editor (\(settings.fontName))").tag("")
+                Divider()
+                ForEach(monospacedFontFamilies.contains(settings.consoleFontName) || settings.consoleFontName.isEmpty
+                        ? monospacedFontFamilies : [settings.consoleFontName] + monospacedFontFamilies, id: \.self) {
+                    Text($0).tag($0)
+                }
+            }
+            Stepper("Size: \(Int(settings.consoleFontSize)) pt", value: $settings.consoleFontSize, in: 8...36)
+            HStack {
+                ColorPicker("Text colour", selection: colorBinding(\.consoleTextColor, fallback: theme.foreground), supportsOpacity: false)
+                if settings.consoleTextColor != nil {
+                    Button("Auto") { settings.consoleTextColor = nil }.controlSize(.small).help("Use the theme's text colour")
+                }
+            }
+            HStack {
+                ColorPicker("Background", selection: colorBinding(\.consoleBackgroundColor,
+                                                                  fallback: settings.transparencyEnabled ? settings.tintColor : theme.background),
+                            supportsOpacity: false)
+                if settings.consoleBackgroundColor != nil {
+                    Button("Auto") { settings.consoleBackgroundColor = nil }.controlSize(.small).help("Use the window tint")
+                }
+            }
+            Text("With a transparent window the background uses the window opacity. A console tab's own colour overrides it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -127,6 +173,9 @@ struct SettingsView: View {
             EditorSettingsControls()
                 .padding(20)
                 .tabItem { Label("Editor", systemImage: "text.alignleft") }
+            ConsoleSettingsControls()
+                .padding(20)
+                .tabItem { Label("Console", systemImage: "terminal") }
         }
         .frame(width: 520, height: 370)
     }

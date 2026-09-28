@@ -10,6 +10,15 @@ final class StatusBar: NSView {
     let eolButton = StatusBar.textButton()
     let appearanceButton = StatusBar.iconButton("circle.lefthalf.filled", "Transparency & tint")
     let consoleButton = StatusBar.iconButton("terminal", "Show/hide console (⌃`)")
+    /// Shown while a macro is being recorded.
+    let recordingLabel: NSTextField = {
+        let l = NSTextField(labelWithString: "● REC")
+        l.font = .systemFont(ofSize: 11, weight: .bold)
+        l.textColor = .systemRed
+        l.toolTip = "Recording a macro — ⌃⇧R to stop"
+        l.isHidden = true
+        return l
+    }()
     private let separatorLine = NSView()
 
     override init(frame: NSRect) {
@@ -20,7 +29,7 @@ final class StatusBar: NSView {
         addSubview(separatorLine)
 
         let left = NSStackView(views: [languageButton, lengthLabel])
-        let right = NSStackView(views: [positionLabel, encodingLabel, eolButton, consoleButton, appearanceButton])
+        let right = NSStackView(views: [recordingLabel, positionLabel, encodingLabel, eolButton, consoleButton, appearanceButton])
         for s in [left, right] {
             s.spacing = 16
             s.translatesAutoresizingMaskIntoConstraints = false

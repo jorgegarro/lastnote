@@ -71,6 +71,19 @@ final class Document: NSObject, ScintillaNotificationProtocol {
     var onStateChange: (() -> Void)?
     /// Caret or selection moved.
     var onCaretChange: (() -> Void)?
+    /// A macro-recordable editing action happened (only while Scintilla recording is on).
+    var onMacroRecord: ((MacroStep) -> Void)?
+
+    /// >0 while LastNote itself drives the editor (auto-indent, highlighting, multi-step
+    /// commands): those Scintilla messages must not end up in a recorded macro.
+    private var macroSuppression = 0
+
+    @discardableResult
+    func quietly<T>(_ body: () -> T) -> T {
+        macroSuppression += 1
+        defer { macroSuppression -= 1 }
+        return body()
+    }
 
     /// Tab colour; nil = use the window tint. Remembered per file.
     var tint: NSColor? {
@@ -375,6 +388,9 @@ final class Document: NSObject, ScintillaNotificationProtocol {
             }
         case SCN_CHARADDED:
             if n.ch == 10 || n.ch == 13 { autoIndent() }
+        case SCN_MACRORECORD:
+            guard macroSuppression == 0, let step = MacroStep.from(notification: n) else { break }
+            onMacroRecord?(step)
         case SCN_MARGINCLICK:
             if Int(n.margin) == marginBookmarks {
                 toggleBookmark(line: view.sci(SCI_LINEFROMPOSITION, n.position))
@@ -386,7 +402,11 @@ final class Document: NSObject, ScintillaNotificationProtocol {
 
     // MARK: Editing helpers
 
-    private func autoIndent() {
+    /// Copy the previous line's indentation after a newline (also used by macro playback, since
+    /// replayed text doesn't fire the "character typed" notification).
+    func autoIndent() { quietly { autoIndentNow() } }
+
+    private func autoIndentNow() {
         let v = view
         let pos = v.sci(SCI_GETCURRENTPOS)
         let line = v.sci(SCI_LINEFROMPOSITION, pos)
@@ -397,7 +417,9 @@ final class Document: NSObject, ScintillaNotificationProtocol {
         v.sci(SCI_GOTOPOS, v.sci(SCI_GETLINEINDENTPOSITION, line))
     }
 
-    private func updateBraceMatch() {
+    private func updateBraceMatch() { quietly { updateBraceMatchNow() } }
+
+    private func updateBraceMatchNow() {
         let v = view
         let pos = v.sci(SCI_GETCURRENTPOS)
         let braces: Set<Int> = Set("()[]{}".utf8.map(Int.init))
@@ -414,7 +436,9 @@ final class Document: NSObject, ScintillaNotificationProtocol {
     }
 
     /// Notepad++ "smart highlighting": selecting a whole word marks its other occurrences.
-    private func updateSmartHighlight() {
+    private func updateSmartHighlight() { quietly { updateSmartHighlightNow() } }
+
+    private func updateSmartHighlightNow() {
         let v = view
         let length = v.sci(SCI_GETLENGTH)
         v.sci(SCI_SETINDICATORCURRENT, indicatorSmartHighlight)

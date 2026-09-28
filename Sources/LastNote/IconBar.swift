@@ -43,6 +43,10 @@ final class IconBar: NSView {
             Item(symbol: "bookmark", tip: "Toggle Bookmark (⌘F2)", action: #selector(MainWindowController.toggleBookmark(_:))),
         ],
         [
+            Item(symbol: "record.circle", tip: "Start/Stop Recording Macro (⌃⇧R)", action: #selector(MainWindowController.toggleMacroRecording(_:))),
+            Item(symbol: "play.circle", tip: "Playback Macro (⌃⇧P)", action: #selector(MainWindowController.playMacro(_:))),
+        ],
+        [
             Item(symbol: "terminal", tip: "Show/Hide Console (⌃`)", action: #selector(MainWindowController.toggleConsole(_:))),
             Item(symbol: "plus.rectangle.on.rectangle", tip: "New Console Tab (⌃⇧`)", action: #selector(MainWindowController.newConsoleTab(_:))),
             Item(symbol: "play.fill", tip: "Run File in Console (⌘R)", action: #selector(MainWindowController.runInConsole(_:))),
@@ -51,6 +55,7 @@ final class IconBar: NSView {
             Item(symbol: "circle.lefthalf.filled", tip: "Transparent Window (⌥⌘T)", action: #selector(MainWindowController.toggleTransparency(_:))),
             Item(symbol: "slider.horizontal.3", tip: "Transparency & Tint…", action: #selector(MainWindowController.showAppearancePopover(_:))),
             Item(symbol: "paintpalette", tip: "Tab Colour…", action: #selector(MainWindowController.showTabColorMenu(_:))),
+            Item(symbol: "rectangle.stack", tip: "Sessions (save / load window layout & colours)", action: #selector(MainWindowController.showSessionsMenu(_:))),
         ],
     ]
 
@@ -100,6 +105,9 @@ final class IconBar: NSView {
             pathLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         stack.setHuggingPriority(.defaultHigh, for: .horizontal)
+        // Let the window squeeze the bar: the stack then drops whole groups (lowest visibility
+        // priority first) instead of forcing the window to stay wide.
+        stack.setClippingResistancePriority(.defaultLow, for: .horizontal)
     }
 
     required init?(coder: NSCoder) { fatalError() }

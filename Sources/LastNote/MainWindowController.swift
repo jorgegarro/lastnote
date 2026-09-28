@@ -6,6 +6,7 @@ import SwiftUI
 /// status bar, and the background layers that provide transparency / blur / tint.
 final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, NSMenuItemValidation {
     private(set) var documents: [Document] = []
+    let macros = MacroRecorder()
     private(set) var selectedIndex = -1
     private var untitledCounter = 0
 
@@ -118,6 +119,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         findBar.isHidden = true
         findBar.document = { [weak self] in self?.current }
         findBar.onClose = { [weak self] in self?.hideFindBar() }
+        findBar.onRecord = { [weak self] in self?.macros.record($0) }
+        NotificationCenter.default.addObserver(forName: MacroRecorder.didChange, object: macros, queue: .main) { [weak self] _ in
+            self?.refreshStatus()
+        }
 
         tabBar.onSelect = { [weak self] in self?.select($0) }
         tabBar.onClose = { [weak self] in self?.closeDocument(at: $0) }
@@ -141,7 +146,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         console.startDirectory = { [weak self] in
             self?.current?.url?.deletingLastPathComponent().path ?? NSHomeDirectory()
         }
-        console.regionColor = { [weak self] in self?.regionColor(for: $0) ?? .clear }
+        console.regionColor = { [weak self] in self?.consoleRegionColor(for: $0) ?? .clear }
         console.onAllSessionsClosed = { [weak self] in
             guard let self, !self.console.isHidden else { return }
             self.setConsoleVisible(false)
@@ -213,6 +218,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         return theme.background.blended(withFraction: 0.35, of: tint) ?? theme.background
     }
 
+    /// Console background: the console tab's own colour, else the console background setting,
+    /// else the window tint. An explicit console background is used as-is when the window is solid.
+    func consoleRegionColor(for tint: NSColor?) -> NSColor {
+        let s = AppSettings.shared
+        if let tint { return regionColor(for: tint) }
+        guard let bg = s.consoleBackgroundColor else { return regionColor(for: nil) }
+        return s.transparencyEnabled ? bg.withAlphaComponent(CGFloat(s.opacity)) : bg
+    }
+
     @objc private func regionFrameChanged(_ n: Notification) { updateTintMask() }
 
     private func updateTintMask() {
@@ -257,6 +271,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         doc.onCaretChange = { [weak self, weak doc] in
             if let doc, doc === self?.current { self?.refreshStatus() }
         }
+        doc.onMacroRecord = { [weak self, weak doc] step in
+            if let doc, doc === self?.current { self?.macros.record(step) }
+        }
+        if macros.isRecording { doc.view.sci(SCI_STARTRECORD) }
         doc.view.translatesAutoresizingMaskIntoConstraints = true
         doc.view.autoresizingMask = [.width, .height]
         documents.append(doc)
@@ -400,6 +418,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         var pos = "Ln \(info.line), Col \(info.column)"
         if info.selectedChars > 0 { pos += "   Sel \(info.selectedChars) | \(info.selectedLines)" }
         statusBar.positionLabel.stringValue = pos
+        statusBar.recordingLabel.isHidden = !macros.isRecording
         statusBar.encodingLabel.stringValue = doc.encodingName
         statusBar.setButtonTitle(statusBar.eolButton, doc.lineEnding.rawValue, theme: theme)
     }
@@ -411,6 +430,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         if s.showWhitespace && s.showLineEndings { on.insert(#selector(toggleShowAllCharacters(_:))) }
         if s.transparencyEnabled { on.insert(#selector(toggleTransparency(_:))) }
         if !console.isHidden { on.insert(#selector(toggleConsole(_:))) }
+        if macros.isRecording { on.insert(#selector(toggleMacroRecording(_:))) }
         var disabled: Set<Selector> = []
         if let doc = current {
             if !doc.isDirty && doc.url != nil { disabled.insert(#selector(saveDocument(_:))) }
@@ -420,6 +440,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             }
         }
         if !documents.contains(where: { $0.isDirty }) { disabled.insert(#selector(saveAllDocuments(_:))) }
+        if macros.isRecording || macros.current.isEmpty { disabled.insert(#selector(playMacro(_:))) }
         iconBar.update(on: on, disabled: disabled)
     }
 
@@ -597,6 +618,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 }
             }
         }
+        if ProcessInfo.processInfo.environment["LASTNOTE_SELFTEST_RECORD"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.toggleMacroRecording(nil) }
+        }
         switch ProcessInfo.processInfo.environment["LASTNOTE_SELFTEST_FOCUS"] {
         case "console": DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.hideFindBar(); self.console.focus() }
         case "editor": DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.hideFindBar() }
@@ -611,6 +635,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         let end = Date().addingTimeInterval(seconds)
         let colors = ["#B3261E", "#2E7D32", "#1565C0", "#6A1B9A", nil]
         var step = 0
+        var layoutSession: SavedSession?
         func tick() {
             guard Date() < end else {
                 print("stress: done after \(step) steps, \(documents.count) docs, \(console.sessions.count) shells")
@@ -618,7 +643,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             }
             step += 1
             let s = AppSettings.shared
-            switch Int.random(in: 0..<22, using: &rng) {
+            switch Int.random(in: 0..<26, using: &rng) {
+            case 22: toggleMacroRecording(nil)
+            case 23: if !macros.isRecording { playMacroSteps(macros.current, times: Int.random(in: 1...3, using: &rng)) }
+            case 24: layoutSession = captureSession(name: "stress", includeTabs: false)
+            case 25: if let l = layoutSession { applySession(l) }
             case 0: newDocument(nil)
             case 1: if documents.count > 1, let d = documents.randomElement(), !d.isDirty,
                        let i = documents.firstIndex(where: { $0 === d }) { closeDocument(at: i) }
@@ -744,20 +773,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
     private func send(_ m: Int32) { current?.view.sci(m) }
 
-    @objc func duplicateLine(_ sender: Any?) { send(SCI_SELECTIONDUPLICATE) }
-    @objc func deleteLine(_ sender: Any?) { send(SCI_LINEDELETE) }
-    @objc func moveLinesUp(_ sender: Any?) { send(SCI_MOVESELECTEDLINESUP) }
-    @objc func moveLinesDown(_ sender: Any?) { send(SCI_MOVESELECTEDLINESDOWN) }
-    @objc func uppercaseSelection(_ sender: Any?) { send(SCI_UPPERCASE) }
-    @objc func lowercaseSelection(_ sender: Any?) { send(SCI_LOWERCASE) }
-    @objc func toggleComment(_ sender: Any?) { current?.toggleLineComment() }
-    @objc func trimTrailingWhitespace(_ sender: Any?) { current?.trimTrailingWhitespace() }
-    @objc func sortLinesAscending(_ sender: Any?) { current?.sortLines(descending: false) }
-    @objc func sortLinesDescending(_ sender: Any?) { current?.sortLines(descending: true) }
+    /// Run an editing command; while recording a macro it's recorded as one step (not as the
+    /// individual Scintilla messages it sends).
+    private func editCommand(_ selector: Selector, _ body: (Document) -> Void) {
+        guard let doc = current else { return }
+        macros.record(.command(selector))
+        doc.quietly { body(doc) }
+    }
+
+    @objc func duplicateLine(_ sender: Any?) { editCommand(#selector(duplicateLine(_:))) { $0.view.sci(SCI_SELECTIONDUPLICATE) } }
+    @objc func deleteLine(_ sender: Any?) { editCommand(#selector(deleteLine(_:))) { $0.view.sci(SCI_LINEDELETE) } }
+    @objc func moveLinesUp(_ sender: Any?) { editCommand(#selector(moveLinesUp(_:))) { $0.view.sci(SCI_MOVESELECTEDLINESUP) } }
+    @objc func moveLinesDown(_ sender: Any?) { editCommand(#selector(moveLinesDown(_:))) { $0.view.sci(SCI_MOVESELECTEDLINESDOWN) } }
+    @objc func uppercaseSelection(_ sender: Any?) { editCommand(#selector(uppercaseSelection(_:))) { $0.view.sci(SCI_UPPERCASE) } }
+    @objc func lowercaseSelection(_ sender: Any?) { editCommand(#selector(lowercaseSelection(_:))) { $0.view.sci(SCI_LOWERCASE) } }
+    @objc func toggleComment(_ sender: Any?) { editCommand(#selector(toggleComment(_:))) { $0.toggleLineComment() } }
+    @objc func trimTrailingWhitespace(_ sender: Any?) { editCommand(#selector(trimTrailingWhitespace(_:))) { $0.trimTrailingWhitespace() } }
+    @objc func sortLinesAscending(_ sender: Any?) { editCommand(#selector(sortLinesAscending(_:))) { $0.sortLines(descending: false) } }
+    @objc func sortLinesDescending(_ sender: Any?) { editCommand(#selector(sortLinesDescending(_:))) { $0.sortLines(descending: true) } }
     @objc func joinLines(_ sender: Any?) {
-        guard let v = current?.view else { return }
-        v.sci(SCI_TARGETFROMSELECTION)
-        v.sci(SCI_LINESJOIN)
+        editCommand(#selector(joinLines(_:))) {
+            $0.view.sci(SCI_TARGETFROMSELECTION)
+            $0.view.sci(SCI_LINESJOIN)
+        }
     }
 
     @objc func convertEOL(_ sender: NSMenuItem) {
@@ -800,9 +838,262 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         focusEditor(nil)
     }
 
-    @objc func toggleBookmark(_ sender: Any?) { current?.toggleBookmark() }
-    @objc func nextBookmark(_ sender: Any?) { current?.gotoBookmark(forward: true) }
-    @objc func previousBookmark(_ sender: Any?) { current?.gotoBookmark(forward: false) }
+    @objc func toggleBookmark(_ sender: Any?) { editCommand(#selector(toggleBookmark(_:))) { $0.toggleBookmark() } }
+    @objc func nextBookmark(_ sender: Any?) { editCommand(#selector(nextBookmark(_:))) { $0.gotoBookmark(forward: true) } }
+    @objc func previousBookmark(_ sender: Any?) { editCommand(#selector(previousBookmark(_:))) { $0.gotoBookmark(forward: false) } }
+
+    // MARK: Sessions
+
+    /// Snapshot the current workspace.
+    func captureSession(name: String, includeTabs: Bool) -> SavedSession {
+        var session = SavedSession(
+            name: name, savedAt: Date(),
+            windowFrame: NSStringFromRect(window?.frame ?? .zero),
+            consoleVisible: !console.isHidden,
+            consoleHeight: Double(console.isHidden ? lastConsoleHeight : console.frame.height),
+            look: AppSettings.shared.snapshot())
+        if includeTabs {
+            session.files = documents.compactMap { d in
+                d.url.map { SavedSession.File(path: $0.path, name: d.customName, tint: d.tint?.hexString) }
+            }
+            session.selectedFile = current?.url?.path
+            session.consoleTabs = console.sessions.map { .init(name: $0.customName, tint: $0.tint?.hexString) }
+        }
+        return session
+    }
+
+    /// Restore a session. Returns the paths of files that no longer exist, or nil if the user
+    /// cancelled (e.g. at a save prompt).
+    @discardableResult
+    func applySession(_ session: SavedSession) -> [String]? {
+        var missing: [String] = []
+        if let files = session.files {
+            guard confirmCloseAll() else { return nil }
+            for d in documents { d.view.removeFromSuperview() }
+            documents.removeAll()
+            selectedIndex = -1
+            newDocument(nil)  // placeholder; replaced by the first file opened
+            let existing = files.filter { FileManager.default.fileExists(atPath: $0.path) }
+            open(urls: existing.map { URL(fileURLWithPath: $0.path) })
+            for f in existing {
+                guard let doc = documents.first(where: { $0.url?.path == f.path }) else { continue }
+                doc.customName = f.name
+                doc.tint = f.tint.flatMap { NSColor(hex: $0) }
+            }
+            if let sel = session.selectedFile, let i = documents.firstIndex(where: { $0.url?.path == sel }) { select(i) }
+            missing = files.map(\.path).filter { !FileManager.default.fileExists(atPath: $0) }
+        }
+        AppSettings.shared.apply(session.look)
+        if let tabs = session.consoleTabs {
+            console.replaceSessions(with: tabs.map { ($0.name, $0.tint.flatMap { NSColor(hex: $0) }) })
+        }
+        if let window {
+            var frame = NSRectFromString(session.windowFrame)
+            if frame.width >= window.minSize.width, frame.height >= window.minSize.height {
+                // Keep it on a screen that still exists.
+                if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }), let main = NSScreen.main {
+                    frame.origin = NSPoint(x: main.visibleFrame.midX - frame.width / 2, y: main.visibleFrame.midY - frame.height / 2)
+                }
+                window.setFrame(frame, display: true, animate: false)
+            }
+        }
+        lastConsoleHeight = CGFloat(session.consoleHeight)
+        setConsoleVisible(session.consoleVisible, focus: false)
+        SessionStore.shared.markActive(session.name)
+        applyAppearance()
+        return missing
+    }
+
+    @objc func saveSession(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "Save Session"
+        alert.informativeText = "Saves the window and console size, transparency, colours and fonts."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "Session name"
+        field.stringValue = UserDefaults.standard.string(forKey: "activeSession") ?? ""
+        let include = NSButton(checkboxWithTitle: "Include open files and console tabs (with their names and colours)", target: nil, action: nil)
+        include.state = .on
+        let stack = NSStackView(views: [field, include])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 420, height: 56)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { NSSound.beep(); return }
+        if SessionStore.shared.session(named: name) != nil {
+            let confirm = NSAlert()
+            confirm.messageText = "Replace the session “\(name)”?"
+            confirm.addButton(withTitle: "Replace")
+            confirm.addButton(withTitle: "Cancel")
+            guard confirm.runModal() == .alertFirstButtonReturn else { return }
+        }
+        SessionStore.shared.save(captureSession(name: name, includeTabs: include.state == .on))
+    }
+
+    @objc func loadSession(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String, let s = SessionStore.shared.session(named: name) else { return }
+        if s.includesTabs, !console.sessions.isEmpty || documents.contains(where: { $0.url != nil }) {
+            let alert = NSAlert()
+            alert.messageText = "Load the session “\(name)”?"
+            alert.informativeText = "Your open tabs and console tabs will be replaced (you'll be asked to save changes). Running console commands will be stopped."
+            alert.addButton(withTitle: "Load")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        guard let missing = applySession(s), !missing.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "\(missing.count) file\(missing.count == 1 ? "" : "s") in “\(name)” no longer exist\(missing.count == 1 ? "s" : "")."
+        alert.informativeText = missing.map { ($0 as NSString).abbreviatingWithTildeInPath }.joined(separator: "\n")
+        alert.runModal()
+    }
+
+    @objc func deleteSession(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete the session “\(name)”?"
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        SessionStore.shared.delete(name: name)
+    }
+
+    @objc func showSessionsMenu(_ sender: Any?) {
+        let menu = SessionMenuController.shared.makeMenu()
+        if let button = sender as? NSView ?? iconBar.buttons[#selector(showSessionsMenu(_:))] {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: button)
+        }
+    }
+
+    // MARK: Menu actions — Macro
+
+    @objc func toggleMacroRecording(_ sender: Any?) {
+        if macros.isRecording {
+            macros.stop()
+            documents.forEach { $0.view.sci(SCI_STOPRECORD) }
+        } else {
+            macros.start()
+            documents.forEach { $0.view.sci(SCI_STARTRECORD) }
+            focusEditor(nil)
+        }
+    }
+
+    @objc func playMacro(_ sender: Any?) { playMacroSteps(macros.current) }
+
+    @objc func runSavedMacro(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String, let m = macros.saved.first(where: { $0.name == name }) else { return }
+        playMacroSteps(m.steps)
+    }
+
+    /// Replay steps on the current document. The whole run is one undo step.
+    /// Returns how many times the macro ran.
+    @discardableResult
+    func playMacroSteps(_ steps: [MacroStep], times: Int = 1, untilEndOfFile: Bool = false) -> Int {
+        guard let doc = current, !steps.isEmpty, !macros.isRecording else { NSSound.beep(); return 0 }
+        let v = doc.view
+        var runs = 0
+        macros.playing {
+            v.sci(SCI_BEGINUNDOACTION)
+            defer { v.sci(SCI_ENDUNDOACTION) }
+            while runs < 1_000_000 {
+                let beforePos = v.sci(SCI_GETCURRENTPOS)
+                let beforeLine = v.sci(SCI_LINEFROMPOSITION, beforePos)
+                for step in steps { apply(step, to: doc) }
+                runs += 1
+                if !untilEndOfFile {
+                    if runs >= times { break }
+                    continue
+                }
+                // "Until end of file": stop at the end, when nothing moved, or when a run on the
+                // last line didn't move to another line.
+                let pos = v.sci(SCI_GETCURRENTPOS)
+                let line = v.sci(SCI_LINEFROMPOSITION, pos)
+                let lastLine = v.sci(SCI_GETLINECOUNT) - 1
+                if pos >= v.sci(SCI_GETLENGTH) && line >= lastLine && beforeLine >= lastLine { break }
+                if pos == beforePos { break }
+                if line == beforeLine && line >= lastLine { break }
+            }
+        }
+        return runs
+    }
+
+    private func apply(_ step: MacroStep, to doc: Document) {
+        switch step.kind {
+        case .sci:
+            step.applySci(to: doc.view)
+            // Typed newlines normally trigger auto-indent via the "character added" notification,
+            // which replayed text doesn't fire.
+            if step.message == SCI_REPLACESEL, let t = step.text, t.hasSuffix("\n") || t.hasSuffix("\r") { doc.autoIndent() }
+        case .command:
+            if let name = step.command { _ = perform(NSSelectorFromString(name), with: nil) }
+        case .find:
+            findBar.perform(step)
+        }
+    }
+
+    @objc func runMacroMultipleTimes(_ sender: Any?) {
+        var choices: [(String, [MacroStep])] = []
+        if !macros.current.isEmpty { choices.append(("Current recorded macro", macros.current)) }
+        choices += macros.saved.map { ($0.name, $0.steps) }
+        guard !choices.isEmpty else { NSSound.beep(); return }
+
+        let alert = NSAlert()
+        alert.messageText = "Run a Macro Multiple Times"
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.addItems(withTitles: choices.map(\.0))
+        let timesRadio = NSButton(radioButtonWithTitle: "Run", target: nil, action: nil)
+        let count = NSTextField(string: "2")
+        count.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        let eofRadio = NSButton(radioButtonWithTitle: "Run until the end of file", target: nil, action: nil)
+        timesRadio.state = .on
+        let radioGroup = RadioGroup([timesRadio, eofRadio])
+        let timesRow = NSStackView(views: [timesRadio, count, NSTextField(labelWithString: "times")])
+        let stack = NSStackView(views: [popup, timesRow, eofRadio])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 300, height: 90)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Run")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        _ = radioGroup
+        let steps = choices[popup.indexOfSelectedItem].1
+        if eofRadio.state == .on {
+            playMacroSteps(steps, untilEndOfFile: true)
+        } else {
+            playMacroSteps(steps, times: max(1, Int(count.stringValue) ?? 1))
+        }
+    }
+
+    @objc func saveCurrentMacro(_ sender: Any?) {
+        guard !macros.current.isEmpty else { NSSound.beep(); return }
+        let alert = NSAlert()
+        alert.messageText = "Save Current Recorded Macro"
+        alert.informativeText = "The first nine saved macros get the shortcuts ⌃⌥1 … ⌃⌥9."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "Macro name"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { NSSound.beep(); return }
+        macros.save(name: name, steps: macros.current)
+    }
+
+    @objc func deleteSavedMacro(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete the macro “\(name)”?"
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        macros.delete(name: name)
+    }
     @objc func clearBookmarks(_ sender: Any?) { current?.view.sci(SCI_MARKERDELETEALL, markerBookmark) }
 
     // MARK: Menu actions — View
@@ -870,6 +1161,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         case #selector(toggleLineEndings(_:)): item.state = s.showLineEndings ? .on : .off
         case #selector(toggleShowAllCharacters(_:)): item.state = s.showWhitespace && s.showLineEndings ? .on : .off
         case #selector(closeConsoleTab(_:)): return !console.sessions.isEmpty
+        case #selector(toggleMacroRecording(_:)):
+            item.title = macros.isRecording ? "Stop Recording" : "Start Recording"
+        case #selector(playMacro(_:)),
+             #selector(saveCurrentMacro(_:)):
+            return !macros.isRecording && !macros.current.isEmpty
+        case #selector(runSavedMacro(_:)), #selector(runMacroMultipleTimes(_:)):
+            return !macros.isRecording
         case #selector(setDarkTheme(_:)): item.state = s.theme == .dark ? .on : .off
         case #selector(setLightTheme(_:)): item.state = s.theme == .light ? .on : .off
         case #selector(toggleConsole(_:)):
@@ -983,5 +1281,20 @@ final class FocusGlowView: NSView {
         } else {
             alphaValue = target
         }
+    }
+}
+
+/// Makes a set of radio buttons mutually exclusive (they don't share a superview action).
+final class RadioGroup: NSObject {
+    private let buttons: [NSButton]
+
+    init(_ buttons: [NSButton]) {
+        self.buttons = buttons
+        super.init()
+        for b in buttons { b.target = self; b.action = #selector(picked(_:)) }
+    }
+
+    @objc private func picked(_ sender: NSButton) {
+        for b in buttons { b.state = b === sender ? .on : .off }
     }
 }

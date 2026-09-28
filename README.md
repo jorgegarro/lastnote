@@ -38,6 +38,14 @@ Requires Xcode 16+ / Swift 6 toolchain, macOS 13+.
   icon, or ⌥⌘K); editor-tab colours are remembered per file
 - **Icon bar** in the title-bar row with the most-used commands (file, clipboard, undo, find, zoom, wrap,
   show all characters, comment, bookmark, console, run, transparency, tab colour)
+- **Console appearance**: its own font, size, text colour and background (Settings ▸ Console, or the
+  **Aa** button in the console bar); console-tab colours still override the background
+- **Macros** (Notepad++ style): Start/Stop Recording (⌃⇧R), Playback (⌃⇧P), Run a Macro Multiple Times
+  (N times or until end of file), Save Current Recorded Macro — saved macros get ⌃⌥1…9. Records typing,
+  caret moves, deletes, LastNote edit commands and Find/Replace; each playback is one undo step
+- **Sessions**: save named snapshots of the window and console size, transparency, colours and fonts,
+  optionally with the open files and console tabs (names + colours); load/delete from the Sessions menu
+  or the stack icon
 - **Focus glow**: a soft glowing border shows whether the cursor is in the editor or the console
   (toggle and colour in the transparency popover / Settings)
 - Transparency: on/off (⌥⌘T), opacity slider, any tint colour, optional frosted-glass blur,

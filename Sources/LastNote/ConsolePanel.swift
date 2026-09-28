@@ -1,5 +1,6 @@
 import AppKit
 import SwiftTerm
+import SwiftUI
 
 /// One shell running in a pseudo-terminal, shown as a console tab.
 final class ConsoleSession: NSObject, LocalProcessTerminalViewDelegate {
@@ -64,11 +65,11 @@ final class ConsoleSession: NSObject, LocalProcessTerminalViewDelegate {
         let settings = AppSettings.shared
         let theme = Theme.named(settings.theme)
         terminal.font = settings.consoleFont
-        terminal.nativeForegroundColor = theme.foreground
+        terminal.nativeForegroundColor = settings.consoleTextColor ?? theme.foreground
         terminal.nativeBackgroundColor = theme.background
         // Default background is drawn clear; the container's tint shows through.
         terminal.backgroundOpacity = 0
-        terminal.caretColor = theme.caret
+        terminal.caretColor = settings.consoleTextColor ?? theme.caret
         terminal.selectedTextBackgroundColor = theme.selection
         container.layer?.backgroundColor = background.cgColor
     }
@@ -102,6 +103,13 @@ final class ConsolePanel: NSView {
     private var nextNumber = 1
     private let colorButton = ConsolePanel.headerButton("paintpalette", "Console tab colour")
     private let hideButton = ConsolePanel.headerButton("chevron.down", "Hide console (⌃`)")
+    private let fontButton = ConsolePanel.headerButton("textformat", "Console font & colours")
+    private lazy var fontPopover: NSPopover = {
+        let p = NSPopover()
+        p.behavior = .transient
+        p.contentViewController = NSHostingController(rootView: ConsoleSettingsControls().padding(16).frame(width: 380))
+        return p
+    }()
 
     /// Called when the last shell exits or is closed.
     var onAllSessionsClosed: (() -> Void)?
@@ -129,7 +137,9 @@ final class ConsolePanel: NSView {
         colorButton.action = #selector(showColorMenu(_:))
         hideButton.target = self
         hideButton.action = #selector(hideConsole)
-        let buttons = NSStackView(views: [colorButton, hideButton])
+        fontButton.target = self
+        fontButton.action = #selector(showFontPopover(_:))
+        let buttons = NSStackView(views: [fontButton, colorButton, hideButton])
         buttons.spacing = 4
         buttons.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(buttons)
@@ -227,6 +237,24 @@ final class ConsolePanel: NSView {
 
     func closeActiveSession() { closeSession(at: activeIndex) }
 
+    /// Stop every shell and start fresh ones with these names/colours (used when loading a session).
+    func replaceSessions(with tabs: [(name: String?, tint: NSColor?)]) {
+        for s in sessions {
+            s.onExit = nil
+            s.terminate()
+            s.container.removeFromSuperview()
+        }
+        sessions.removeAll()
+        activeIndex = -1
+        nextNumber = 1
+        for tab in tabs {
+            let s = addSession(focus: false, tint: tab.tint)
+            s.customName = tab.name
+        }
+        if !sessions.isEmpty { select(0, focus: false) }
+        reloadTabs()
+    }
+
     private func removeSession(at index: Int) {
         let wasActive = index == activeIndex
         sessions[index].container.removeFromSuperview()
@@ -272,6 +300,11 @@ final class ConsolePanel: NSView {
             if let i = self?.sessions.firstIndex(where: { $0 === s }) { self?.closeSession(at: i) }
         })
         return menu
+    }
+
+    @objc func showFontPopover(_ sender: Any?) {
+        if fontPopover.isShown { fontPopover.close(); return }
+        fontPopover.show(relativeTo: fontButton.bounds, of: fontButton, preferredEdge: .maxY)
     }
 
     @objc func showColorMenu(_ sender: Any?) {
@@ -321,7 +354,7 @@ final class ConsolePanel: NSView {
         let theme = Theme.named(AppSettings.shared.theme)
         for s in sessions { s.applySettings(background: regionColor(s.tint)) }
         header.layer?.backgroundColor = theme.chrome.cgColor
-        for b in [colorButton, hideButton] { b.contentTintColor = theme.chromeText }
+        for b in [fontButton, colorButton, hideButton] { b.contentTintColor = theme.chromeText }
         reloadTabs()
     }
 }
